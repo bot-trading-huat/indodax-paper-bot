@@ -5,10 +5,17 @@ import random
 import threading
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import sys
 sys.stdout.reconfigure(line_buffering=True)
+
+# Format Timezone WIB (UTC+7)
+WIB = timezone(timedelta(hours=7))
+
+def get_wib_time():
+    """Mengembalikan string jam dalam format WIB (HH:MM:SS)"""
+    return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
 # CONFIGURATION
@@ -33,7 +40,7 @@ state = {
     "minute_wins": 0,
     "minute_losses": 0,
     "minute_logs": [],
-    "dashboard_msg_id": None,      # Hanya menyimpan ID pesan AKTIF terbaru
+    "dashboard_msg_id": None,
     "dashboard_chat_id": ALLOWED_CHAT_ID,
     "last_rendered_text": ""
 }
@@ -133,7 +140,7 @@ def get_home_text(is_final=False):
     price = get_indodax_price() or 0
     asset_val = state["asset_balance"] * price
     total_equity = state["idr_balance"] + asset_val
-    now = datetime.now().strftime("%H:%M:%S")
+    now_wib = get_wib_time()
 
     pos_info = "⚡ *Posisi:* Scalping (Memegang BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Cash Ready)"
 
@@ -152,7 +159,7 @@ def get_home_text(is_final=False):
             f"Status Bot: 🏁 *REKAP SESI (SELESAI)*\n"
             f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
-            f"⏱ _Waktu Selesai: {now}_\n\n"
+            f"⏱ _Waktu Selesai: {now_wib} WIB_\n\n"
             f"📋 *RIWAYAT TRANSAKSI SESI INI:*\n{block_text}\n"
             f"📊 *RINGKASAN SESI:*\n"
             f"🟢 *Profit:* {state['minute_wins']}x\n"
@@ -165,18 +172,17 @@ def get_home_text(is_final=False):
         f"Status Bot: {status_str}\n"
         f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
         f"{pos_info}\n"
-        f"⏱ _Live Update: {now}_\n\n"
+        f"⏱ _Live Update: {now_wib} WIB_\n\n"
         f"📋 *RIWAYAT TRANSAKSI (SESI INI):*\n{block_text}\n\n"
         f"Pilih menu di bawah untuk mengelola bot:"
     )
 
 # ==========================================
-# AUTO-REFRESH LIVE DASHBOARD (HANYA UNTUK PESAN AKTIF)
+# AUTO-REFRESH LIVE DASHBOARD
 # ==========================================
 def auto_refresh_dashboard_loop():
     while True:
         try:
-            # Refresh HANYA dilakukan jika ada dashboard_msg_id aktif
             if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 new_text = get_home_text()
                 if new_text != state["last_rendered_text"]:
@@ -201,11 +207,9 @@ def minutely_reset_loop():
         time.sleep(60)
         try:
             if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
-                # 1. Bekukan pesan lama: Ubah ke tampilan REKAP tanpa tombol
                 old_msg_id = state["dashboard_msg_id"]
                 final_text = get_home_text(is_final=True)
                 
-                # Kosongkan ID agar auto_refresh berhenti memperbarui pesan ini
                 state["dashboard_msg_id"] = None
                 
                 telegram("editMessageText", {
@@ -215,14 +219,12 @@ def minutely_reset_loop():
                     "parse_mode": "Markdown"
                 })
 
-                # 2. Reset statistik sesi per menit
                 price = get_indodax_price() or 0
                 state["minute_start_equity"] = state["idr_balance"] + (state["asset_balance"] * price)
                 state["minute_wins"] = 0
                 state["minute_losses"] = 0
                 state["minute_logs"] = []
 
-                # 3. Buat pesan baru (ID pesan baru ini yang akan di-update oleh auto_refresh_loop)
                 new_home_text = get_home_text()
                 send_menu(state["dashboard_chat_id"], new_home_text)
         except Exception as e:
@@ -238,7 +240,7 @@ def trading_loop():
     while True:
         try:
             if state["is_running"]:
-                now = datetime.now().strftime("%H:%M:%S")
+                now_wib = get_wib_time()
 
                 if not state["in_position"] and state["idr_balance"] > 0:
                     state["buy_price"] = base_price * (1 + random.uniform(-0.001, 0.001))
@@ -247,7 +249,7 @@ def trading_loop():
                     state["idr_balance"] = 0.0
                     state["in_position"] = True
 
-                    log_entry = f"[{now}] BUY  @ Rp {state['buy_price']:,.0f}"
+                    log_entry = f"[{now_wib}] BUY  @ Rp {state['buy_price']:,.0f}"
                     state["minute_logs"].append(log_entry)
 
                 elif state["in_position"]:
@@ -272,7 +274,7 @@ def trading_loop():
                         state["minute_losses"] += 1
                         tag = "SELL LOSS"
 
-                    log_entry = f"[{now}] {tag} @ Rp {sell_price:,.0f} ({pnl_idr:+,.0f})"
+                    log_entry = f"[{now_wib}] {tag} @ Rp {sell_price:,.0f} ({pnl_idr:+,.0f})"
                     state["minute_logs"].append(log_entry)
 
         except Exception as e:
