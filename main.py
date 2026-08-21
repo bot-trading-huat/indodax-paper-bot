@@ -27,7 +27,7 @@ state = {
     "buy_price": 0.0,
     "price_history": [],
     "total_trades": 0,
-    "trades_this_minute": 0,  # Menghitung eksekusi khusus 1 menit terakhir
+    "trades_this_minute": 0,
     "winning_trades": 0,
     "losing_trades": 0,
 }
@@ -47,17 +47,14 @@ def telegram(method, params=None):
         print("Telegram API Error:", e)
         return None
 
-def get_main_keyboard():
+def get_inline_keyboard():
+    """Tombol Inline Menempel di Bawah Pesan (Layout 1 Tombol per Baris)"""
     return {
         "inline_keyboard": [
-            [
-                {"text": "📊 Status Bot", "callback_data": "btn_status"},
-                {"text": "💰 Cek Saldo", "callback_data": "btn_balance"}
-            ],
-            [
-                {"text": "📈 Laporan PnL", "callback_data": "btn_report"},
-                {"text": "⚡ Cek Harga BTC", "callback_data": "btn_price"}
-            ]
+            [{"text": "📊 Status Bot & Posisi", "callback_data": "btn_status"}],
+            [{"text": "💰 Cek Saldo Demo", "callback_data": "btn_balance"}],
+            [{"text": "📈 Laporan PnL & WinRate", "callback_data": "btn_report"}],
+            [{"text": "⚡ Cek Harga BTC Real-Time", "callback_data": "btn_price"}]
         ]
     }
 
@@ -66,7 +63,17 @@ def send_menu(chat_id, text):
         "chat_id": str(chat_id),
         "text": text,
         "parse_mode": "Markdown",
-        "reply_markup": get_main_keyboard()
+        "reply_markup": get_inline_keyboard()
+    })
+
+def update_menu(chat_id, message_id, text):
+    """Mengubah teks pesan tanpa membuat pesan baru"""
+    return telegram("editMessageText", {
+        "chat_id": str(chat_id),
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": get_inline_keyboard()
     })
 
 def answer_callback(callback_query_id, text=""):
@@ -81,7 +88,7 @@ def broadcast(text):
             "chat_id": str(ALLOWED_CHAT_ID),
             "text": text,
             "parse_mode": "Markdown",
-            "reply_markup": get_main_keyboard()
+            "reply_markup": get_inline_keyboard()
         })
 
 # ==========================================
@@ -101,17 +108,14 @@ def get_indodax_price():
 # LAPORAN RUTIN PER 1 MENIT
 # ==========================================
 def minutely_report_loop():
-    print("⏰ Minutely Report Engine Started...")
     while True:
-        time.sleep(60)  # Tunggu 60 detik
-        
+        time.sleep(60)
         try:
             current_price = get_indodax_price() or 0
             asset_value = state["asset_balance"] * current_price
             total_equity = state["idr_balance"] + asset_value
             pnl_idr = total_equity - START_BALANCE
             pnl_percent = (pnl_idr / START_BALANCE) * 100
-            
             now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
             report_msg = (
@@ -124,18 +128,15 @@ def minutely_report_loop():
                 f"💰 *Total Saldo Sekarang:* Rp {total_equity:,.0f}\n"
                 f"📈 *Total Profit / Loss:* Rp {pnl_idr:,.0f} ({pnl_percent:+.2f}%)\n"
                 f"🎯 *Win / Loss:* {state['winning_trades']} Win / {state['losing_trades']} Loss\n"
-                f"📊 *Total Eksekusi Keseluruhan:* {state['total_trades']} x"
+                f"📊 *Total Eksekusi Overall:* {state['total_trades']} x"
             )
-            
-            # Reset counter transaksi per menit setelah laporan terkirim
             state['trades_this_minute'] = 0
-            
             broadcast(report_msg)
         except Exception as e:
             print("REPORT ERROR:", e)
 
 # ==========================================
-# TRADING ENGINE (2 DETIK)
+# TRADING ENGINE
 # ==========================================
 def analyze_signal(current_price):
     state["price_history"].append(current_price)
@@ -150,12 +151,10 @@ def analyze_signal(current_price):
     return "WAIT"
 
 def trading_loop():
-    print("⚡ Engine Scalping Aktif...")
     while True:
         try:
             current_price = get_indodax_price()
             if current_price:
-                # 1. LOGIKA BUY
                 if not state["in_position"]:
                     if analyze_signal(current_price) == "BUY":
                         amount_buy = state["idr_balance"] * (1 - FEE_RATE)
@@ -163,17 +162,14 @@ def trading_loop():
                         state["buy_price"] = current_price
                         state["idr_balance"] = 0.0
                         state["in_position"] = True
-                        state["trades_this_minute"] += 1  # Tambah hitungan main menit ini
+                        state["trades_this_minute"] += 1
 
                         broadcast(
                             f"⚡ *SCALPING BUY EXECUTED*\n\n"
                             f"• Pair: {PAIR.upper()}\n"
-                            f"• Harga Beli: Rp {current_price:,.0f}\n"
-                            f"• Target TP: Rp {current_price * (1 + MIN_TAKE_PROFIT):,.0f}\n"
-                            f"• Cut Loss: Rp {current_price * (1 - STOP_LOSS):,.0f}"
+                            f"• Harga Beli: Rp {current_price:,.0f}"
                         )
 
-                # 2. LOGIKA SELL
                 elif state["in_position"]:
                     pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
                     should_sell = False
@@ -197,14 +193,13 @@ def trading_loop():
                         state["asset_balance"] = 0.0
                         state["in_position"] = False
                         state["total_trades"] += 1
-                        state["trades_this_minute"] += 1  # Tambah hitungan main menit ini
+                        state["trades_this_minute"] += 1
                         state["price_history"].clear()
 
                         broadcast(
                             f"🎯 *SCALPING SELL EXECUTED ({reason})*\n\n"
                             f"• Harga Jual: Rp {current_price:,.0f}\n"
-                            f"• Hasil PnL: Rp {pnl_idr:,.0f}\n"
-                            f"• Saldo IDR: Rp {state['idr_balance']:,.0f}"
+                            f"• Hasil PnL: Rp {pnl_idr:,.0f}"
                         )
         except Exception as e:
             print("TRADING ERROR:", e)
@@ -233,25 +228,28 @@ def get_report_text():
     return f"📈 *LAPORAN PERFORMA*\n\n• Modal Awal: Rp {START_BALANCE:,.0f}\n• Total Equity: Rp {equity:,.0f}\n• Profit/Loss: Rp {pnl:,.0f} ({pct:+.2f}%)\n• Total Trade: {state['total_trades']} x\n• Win/Loss: {state['winning_trades']} W / {state['losing_trades']} L"
 
 def handle_update(update):
+    # Handling Klik Tombol (Callback Query)
     if "callback_query" in update:
         cb = update["callback_query"]
         cb_id = cb["id"]
         chat_id = cb["message"]["chat"]["id"]
+        msg_id = cb["message"]["message_id"]
         data = cb.get("data", "")
 
         answer_callback(cb_id)
 
         if data == "btn_status":
-            send_menu(chat_id, get_status_text())
+            update_menu(chat_id, msg_id, get_status_text())
         elif data == "btn_balance":
-            send_menu(chat_id, get_balance_text())
+            update_menu(chat_id, msg_id, get_balance_text())
         elif data == "btn_report":
-            send_menu(chat_id, get_report_text())
+            update_menu(chat_id, msg_id, get_report_text())
         elif data == "btn_price":
             price = get_indodax_price() or 0
-            send_menu(chat_id, f"⚡ *HARGA REAL-TIME*\n\n{PAIR.upper()}: Rp {price:,.0f}")
+            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\n{PAIR.upper()}: Rp {price:,.0f}")
         return
 
+    # Handling Pesan Teks
     if "message" in update:
         msg = update["message"]
         chat_id = msg.get("chat", {}).get("id")
@@ -259,7 +257,7 @@ def handle_update(update):
         if not chat_id: return
 
         if text.startswith("/start") or text.startswith("/menu"):
-            send_menu(chat_id, "🤖 *DASHBOARD SCALPER BOT*\n\nPilih menu di bawah:")
+            send_menu(chat_id, "🤖 *INDODAX TRADING DASHBOARD*\n\nKlik tombol di bawah ini untuk melihat data secara instan:")
         elif text.startswith("/id"):
             telegram("sendMessage", {"chat_id": str(chat_id), "text": f"ID Anda: `{chat_id}`", "parse_mode": "Markdown"})
 
