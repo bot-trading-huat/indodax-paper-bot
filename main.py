@@ -4,6 +4,7 @@ import json
 import threading
 import urllib.request
 import urllib.parse
+from datetime import datetime
 
 # ==========================================
 # CONFIGURATION & STATE MANAGEMENT
@@ -11,50 +12,77 @@ import urllib.parse
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Indodax & Risk Parameters
 START_BALANCE = float(os.getenv("START_BALANCE", 100000))
 PAIR = os.getenv("PAIR", "btc_idr").lower()
 FEE_RATE = float(os.getenv("FEE_RATE", 0.002))
 
-# Scalping Settings (Main Cepat)
-MIN_TAKE_PROFIT = float(os.getenv("MIN_TAKE_PROFIT", 0.008)) # Target profit cepat (0.8%)
-STOP_LOSS = float(os.getenv("STOP_LOSS", 0.015))            # Stop loss ketat (1.5%)
-INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", 2))    # Pengecekan cepat tiap 2 detik
+MIN_TAKE_PROFIT = float(os.getenv("MIN_TAKE_PROFIT", 0.008))
+STOP_LOSS = float(os.getenv("STOP_LOSS", 0.015))
+INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", 2))
 
-# State Paper Trading
 state = {
     "idr_balance": START_BALANCE,
     "asset_balance": 0.0,
     "in_position": False,
     "buy_price": 0.0,
-    "price_history": [],      # Menyimpan histori harga untuk deteksi momentum
+    "price_history": [],
     "total_trades": 0,
+    "trades_this_minute": 0,  # Menghitung eksekusi khusus 1 menit terakhir
     "winning_trades": 0,
     "losing_trades": 0,
-    "last_report_hour": -1
 }
 
 # ==========================================
 # TELEGRAM HELPER FUNCTIONS
 # ==========================================
 def telegram(method, params=None):
-    if not TOKEN:
-        return None
+    if not TOKEN: return None
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
-    data = urllib.parse.urlencode(params or {}).encode("utf-8")
+    data = json.dumps(params or {}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
-        req = urllib.request.Request(url, data=data)
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
+        print("Telegram API Error:", e)
         return None
 
-def send_message(chat_id, text):
-    return telegram("sendMessage", {"chat_id": str(chat_id), "text": text, "parse_mode": "Markdown"})
+def get_main_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Status Bot", "callback_data": "btn_status"},
+                {"text": "💰 Cek Saldo", "callback_data": "btn_balance"}
+            ],
+            [
+                {"text": "📈 Laporan PnL", "callback_data": "btn_report"},
+                {"text": "⚡ Cek Harga BTC", "callback_data": "btn_price"}
+            ]
+        ]
+    }
+
+def send_menu(chat_id, text):
+    return telegram("sendMessage", {
+        "chat_id": str(chat_id),
+        "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": get_main_keyboard()
+    })
+
+def answer_callback(callback_query_id, text=""):
+    return telegram("answerCallbackQuery", {
+        "callback_query_id": callback_query_id,
+        "text": text
+    })
 
 def broadcast(text):
     if ALLOWED_CHAT_ID:
-        send_message(ALLOWED_CHAT_ID, text)
+        telegram("sendMessage", {
+            "chat_id": str(ALLOWED_CHAT_ID),
+            "text": text,
+            "parse_mode": "Markdown",
+            "reply_markup": get_main_keyboard()
+        })
 
 # ==========================================
 # INDODAX REAL-TIME DATA
@@ -70,162 +98,187 @@ def get_indodax_price():
         return None
 
 # ==========================================
-# STRATEGI SCALPING MOMENTUM (PINTAR & CEPAT)
+# LAPORAN RUTIN PER 1 MENIT
+# ==========================================
+def minutely_report_loop():
+    print("⏰ Minutely Report Engine Started...")
+    while True:
+        time.sleep(60)  # Tunggu 60 detik
+        
+        try:
+            current_price = get_indodax_price() or 0
+            asset_value = state["asset_balance"] * current_price
+            total_equity = state["idr_balance"] + asset_value
+            pnl_idr = total_equity - START_BALANCE
+            pnl_percent = (pnl_idr / START_BALANCE) * 100
+            
+            now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+            report_msg = (
+                f"⏱ *LAPORAN RUTIN 1 MENIT*\n"
+                f"📅 *Waktu:* `{now}`\n"
+                f"────────────────────────\n"
+                f"🔄 *Main Menit Ini:* {state['trades_this_minute']} kali\n"
+                f"💵 *Saldo IDR:* Rp {state['idr_balance']:,.0f}\n"
+                f"🪙 *Nilai Aset:* Rp {asset_value:,.0f}\n"
+                f"💰 *Total Saldo Sekarang:* Rp {total_equity:,.0f}\n"
+                f"📈 *Total Profit / Loss:* Rp {pnl_idr:,.0f} ({pnl_percent:+.2f}%)\n"
+                f"🎯 *Win / Loss:* {state['winning_trades']} Win / {state['losing_trades']} Loss\n"
+                f"📊 *Total Eksekusi Keseluruhan:* {state['total_trades']} x"
+            )
+            
+            # Reset counter transaksi per menit setelah laporan terkirim
+            state['trades_this_minute'] = 0
+            
+            broadcast(report_msg)
+        except Exception as e:
+            print("REPORT ERROR:", e)
+
+# ==========================================
+# TRADING ENGINE (2 DETIK)
 # ==========================================
 def analyze_signal(current_price):
-    """Menganalisis pergerakan harga singkat (momentum)"""
     state["price_history"].append(current_price)
-    
-    # Simpan maksimal 10 data harga terakhir (20 detik terakhir)
     if len(state["price_history"]) > 10:
         state["price_history"].pop(0)
-        
     if len(state["price_history"]) < 5:
-        return "WAIT" # Butuh data awal dulu
+        return "WAIT"
 
-    # Hitung pergerakan rata-rata singkat
     avg_price = sum(state["price_history"]) / len(state["price_history"])
-    
-    # Sinyal Beli: Harga saat ini mendadak naik di atas rata-rata (Momentum Beli)
     if current_price > avg_price and state["price_history"][-1] > state["price_history"][-2]:
         return "BUY"
-        
     return "WAIT"
 
 def trading_loop():
-    print("⚡ Scalping Engine Started (Mode Cepat)...")
-    
+    print("⚡ Engine Scalping Aktif...")
     while True:
         try:
             current_price = get_indodax_price()
-
             if current_price:
-                # 1. LOGIKA BELI (Mencari Momentum Naik)
+                # 1. LOGIKA BUY
                 if not state["in_position"]:
-                    signal = analyze_signal(current_price)
-                    
-                    if signal == "BUY":
-                        amount_to_buy_idr = state["idr_balance"] * (1 - FEE_RATE)
-                        state["asset_balance"] = amount_to_buy_idr / current_price
+                    if analyze_signal(current_price) == "BUY":
+                        amount_buy = state["idr_balance"] * (1 - FEE_RATE)
+                        state["asset_balance"] = amount_buy / current_price
                         state["buy_price"] = current_price
                         state["idr_balance"] = 0.0
                         state["in_position"] = True
+                        state["trades_this_minute"] += 1  # Tambah hitungan main menit ini
 
-                        msg = (
-                            f"⚡ *SCALPING BUY*\n"
+                        broadcast(
+                            f"⚡ *SCALPING BUY EXECUTED*\n\n"
                             f"• Pair: {PAIR.upper()}\n"
                             f"• Harga Beli: Rp {current_price:,.0f}\n"
                             f"• Target TP: Rp {current_price * (1 + MIN_TAKE_PROFIT):,.0f}\n"
                             f"• Cut Loss: Rp {current_price * (1 - STOP_LOSS):,.0f}"
                         )
-                        print(msg)
-                        broadcast(msg)
 
-                # 2. LOGIKA JUAL (Cek Profit/Rugi Cepat)
+                # 2. LOGIKA SELL
                 elif state["in_position"]:
-                    pnl_percent = (current_price - state["buy_price"]) / state["buy_price"]
+                    pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
                     should_sell = False
                     reason = ""
 
-                    if pnl_percent >= MIN_TAKE_PROFIT:
+                    if pnl_pct >= MIN_TAKE_PROFIT:
                         should_sell = True
-                        reason = f"QUICK PROFIT (+{pnl_percent*100:.2f}%)"
+                        reason = f"PROFIT (+{pnl_pct*100:.2f}%)"
                         state["winning_trades"] += 1
-                    elif pnl_percent <= -STOP_LOSS:
+                    elif pnl_pct <= -STOP_LOSS:
                         should_sell = True
-                        reason = f"STOP LOSS ({pnl_percent*100:.2f}%)"
+                        reason = f"STOP LOSS ({pnl_pct*100:.2f}%)"
                         state["losing_trades"] += 1
 
                     if should_sell:
-                        gross_idr = state["asset_balance"] * current_price
-                        net_idr = gross_idr * (1 - FEE_RATE)
-                        pnl_idr = net_idr - (state["asset_balance"] * state["buy_price"])
+                        gross = state["asset_balance"] * current_price
+                        net = gross * (1 - FEE_RATE)
+                        pnl_idr = net - (state["asset_balance"] * state["buy_price"])
 
-                        state["idr_balance"] = net_idr
+                        state["idr_balance"] = net
                         state["asset_balance"] = 0.0
                         state["in_position"] = False
                         state["total_trades"] += 1
-                        state["price_history"].clear() # Reset histori harga setelah jual
+                        state["trades_this_minute"] += 1  # Tambah hitungan main menit ini
+                        state["price_history"].clear()
 
-                        msg = (
-                            f"🎯 *SCALPING SELL ({reason})*\n"
+                        broadcast(
+                            f"🎯 *SCALPING SELL EXECUTED ({reason})*\n\n"
                             f"• Harga Jual: Rp {current_price:,.0f}\n"
                             f"• Hasil PnL: Rp {pnl_idr:,.0f}\n"
-                            f"• Sisa Saldo: Rp {state['idr_balance']:,.0f}"
+                            f"• Saldo IDR: Rp {state['idr_balance']:,.0f}"
                         )
-                        print(msg)
-                        broadcast(msg)
-
         except Exception as e:
-            print("TRADING ERROR:", repr(e))
+            print("TRADING ERROR:", e)
 
         time.sleep(INTERVAL_SECONDS)
 
 # ==========================================
-# LAPORAN OTOMATIS PER JAM (AUTOMATIC REPORT)
+# TELEGRAM HANDLER
 # ==========================================
-def hourly_report_loop():
-    while True:
-        current_hour = time.localtime().tm_hour
-        if current_hour != state["last_report_hour"]:
-            state["last_report_hour"] = current_hour
-            
-            current_price = get_indodax_price() or 0
-            asset_val = state["asset_balance"] * current_price
-            total_equity = state["idr_balance"] + asset_val
-            total_pnl = total_equity - START_BALANCE
+def get_status_text():
+    price = get_indodax_price() or 0
+    pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Mencari Sinyal Beli"
+    return f"📊 *STATUS BOT*\n\n• Pair: {PAIR.upper()}\n• Harga BTC: Rp {price:,.0f}\n• Posisi: {pos}"
 
-            msg = (
-                f"📈 *LAPORAN PERJAM (AUTOMATIC REPORT)*\n\n"
-                f"• Total Equity: Rp {total_equity:,.0f}\n"
-                f"• Total PnL: Rp {total_pnl:,.0f}\n"
-                f"• Total Transaksi: {state['total_trades']} kali\n"
-                f"• Win Rate: {state['winning_trades']} Win / {state['losing_trades']} Loss"
-            )
-            broadcast(msg)
-            
-        time.sleep(60)
+def get_balance_text():
+    price = get_indodax_price() or 0
+    asset_val = state["asset_balance"] * price
+    equity = state["idr_balance"] + asset_val
+    return f"💰 *SALDO DEMO*\n\n• Cash IDR: Rp {state['idr_balance']:,.0f}\n• Nilai Aset: Rp {asset_val:,.0f}\n• Total Equity: Rp {equity:,.0f}"
 
-# ==========================================
-# TELEGRAM COMMANDS & MAIN EXECUTION
-# ==========================================
-def handle_message(message):
-    chat_id = message.get("chat", {}).get("id")
-    text = (message.get("text") or "").strip()
-    if not chat_id or not text: return
+def get_report_text():
+    price = get_indodax_price() or 0
+    equity = state["idr_balance"] + (state["asset_balance"] * price)
+    pnl = equity - START_BALANCE
+    pct = (pnl / START_BALANCE) * 100
+    return f"📈 *LAPORAN PERFORMA*\n\n• Modal Awal: Rp {START_BALANCE:,.0f}\n• Total Equity: Rp {equity:,.0f}\n• Profit/Loss: Rp {pnl:,.0f} ({pct:+.2f}%)\n• Total Trade: {state['total_trades']} x\n• Win/Loss: {state['winning_trades']} W / {state['losing_trades']} L"
 
-    command = text.split()[0].lower().split("@")[0]
+def handle_update(update):
+    if "callback_query" in update:
+        cb = update["callback_query"]
+        cb_id = cb["id"]
+        chat_id = cb["message"]["chat"]["id"]
+        data = cb.get("data", "")
 
-    if command == "/start":
-        send_message(chat_id, "🤖 *SCALPER BOT INDODAX ACTIVE*\n\nBot aktif memantau harga per 2 detik.")
-    elif command == "/balance":
-        current_price = get_indodax_price() or 0
-        total_equity = state["idr_balance"] + (state["asset_balance"] * current_price)
-        send_message(chat_id, f"💰 *SALDO DEMO*\n\n• Cash IDR: Rp {state['idr_balance']:,.0f}\n• Nilai Aset: Rp {state['asset_balance']*current_price:,.0f}\n• Total Equity: Rp {total_equity:,.0f}")
-    elif command == "/report":
-        current_price = get_indodax_price() or 0
-        total_equity = state["idr_balance"] + (state["asset_balance"] * current_price)
-        send_message(chat_id, f"📊 *LAPORAN SCALPING*\n\n• Equity: Rp {total_equity:,.0f}\n• Trades: {state['total_trades']} x\n• Win/Loss: {state['winning_trades']}/{state['losing_trades']}")
+        answer_callback(cb_id)
+
+        if data == "btn_status":
+            send_menu(chat_id, get_status_text())
+        elif data == "btn_balance":
+            send_menu(chat_id, get_balance_text())
+        elif data == "btn_report":
+            send_menu(chat_id, get_report_text())
+        elif data == "btn_price":
+            price = get_indodax_price() or 0
+            send_menu(chat_id, f"⚡ *HARGA REAL-TIME*\n\n{PAIR.upper()}: Rp {price:,.0f}")
+        return
+
+    if "message" in update:
+        msg = update["message"]
+        chat_id = msg.get("chat", {}).get("id")
+        text = (msg.get("text") or "").strip()
+        if not chat_id: return
+
+        if text.startswith("/start") or text.startswith("/menu"):
+            send_menu(chat_id, "🤖 *DASHBOARD SCALPER BOT*\n\nPilih menu di bawah:")
+        elif text.startswith("/id"):
+            telegram("sendMessage", {"chat_id": str(chat_id), "text": f"ID Anda: `{chat_id}`", "parse_mode": "Markdown"})
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
     while True:
         try:
-            params = {"timeout": 25, "allowed_updates": json.dumps(["message"])}
+            params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
             if offset is not None: params["offset"] = offset
-            result = telegram("getUpdates", params)
-            if result and result.get("ok"):
-                for update in result.get("result", []):
-                    offset = update["update_id"] + 1
-                    if update.get("message"): handle_message(update["message"])
-        except Exception:
+            res = telegram("getUpdates", params)
+            if res and res.get("ok"):
+                for upd in res.get("result", []):
+                    offset = upd["update_id"] + 1
+                    handle_update(upd)
+        except Exception as e:
             time.sleep(5)
 
 if __name__ == "__main__":
-    # Jalankan Trading Loop (Tiap 2 detik)
     threading.Thread(target=trading_loop, daemon=True).start()
-    # Jalankan Laporan Otomatis (Tiap jam)
-    threading.Thread(target=hourly_report_loop, daemon=True).start()
-    # Jalankan Telegram Listener
+    threading.Thread(target=minutely_report_loop, daemon=True).start()
     polling()
