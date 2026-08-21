@@ -6,7 +6,6 @@ import urllib.request
 import urllib.parse
 from datetime import datetime
 
-# Force Python output agar langsung muncul di log Railway tanpa buffering
 import sys
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -31,11 +30,13 @@ state = {
     "in_position": False,
     "buy_price": 0.0,
     "total_trades": 0,
-    "trades_this_minute": 0,
     "winning_trades": 0,
     "losing_trades": 0,
+    "minute_wins": 0,
+    "minute_losses": 0,
+    "minute_logs": [],        # Menampung log transaksi per menit
     "dashboard_msg_id": None,
-    "dashboard_chat_id": None,
+    "dashboard_chat_id": ALLOWED_CHAT_ID,
     "last_rendered_text": ""
 }
 
@@ -90,8 +91,10 @@ def send_menu(chat_id, text):
         state["last_rendered_text"] = text
     return res
 
-def update_menu(chat_id, message_id, text, is_home=False):
-    markup = get_main_keyboard() if is_home else get_back_keyboard()
+def update_menu(chat_id, message_id, text, is_home=False, markup=None):
+    if markup is None:
+        markup = get_main_keyboard() if is_home else get_back_keyboard()
+
     if is_home:
         state["dashboard_msg_id"] = message_id
         state["dashboard_chat_id"] = chat_id
@@ -112,17 +115,6 @@ def answer_callback(callback_query_id, text=None):
     if text: payload["text"] = text
     return telegram("answerCallbackQuery", payload)
 
-def broadcast(text, include_keyboard=True):
-    if ALLOWED_CHAT_ID:
-        payload = {
-            "chat_id": str(ALLOWED_CHAT_ID),
-            "text": text,
-            "parse_mode": "Markdown"
-        }
-        if include_keyboard:
-            payload["reply_markup"] = get_main_keyboard()
-        telegram("sendMessage", payload)
-
 # ==========================================
 # INDODAX REAL-TIME DATA
 # ==========================================
@@ -138,14 +130,59 @@ def get_indodax_price():
         return None
 
 # ==========================================
-# AUTO-REFRESH LIVE DASHBOARD (MAX SPEED TELEGRAM)
+# TEXT GENERATOR FOR DASHBOARD
+# ==========================================
+def get_home_text(is_final=False):
+    status_str = "🟢 *AKTIF (RUNNING)*" if state["is_running"] else "🔴 *BERHENTI (STOPPED)*"
+    price = get_indodax_price() or 0
+    asset_val = state["asset_balance"] * price
+    total_equity = state["idr_balance"] + asset_val
+    now = datetime.now().strftime("%H:%M:%S")
+
+    pos_info = "⚡ *Posisi:* Beli BTC @ Rp {:,.0f}".format(state["buy_price"]) if state["in_position"] else "💵 *Posisi:* Cash IDR Ready"
+
+    # Membuat Format Kolom Hitam untuk Riwayat Transaksi Menit Ini
+    if state["minute_logs"]:
+        logs_str = "\n".join(state["minute_logs"])
+        block_text = f"```\n{logs_str}\n```"
+    else:
+        block_text = "```\nBelum ada transaksi transaksi di menit ini...\n```"
+
+    if is_final:
+        return (
+            f"🤖 *TRADE INDODAX #HUAT*\n\n"
+            f"Status Bot: 🏁 *SELESAI (MENIT INI)*\n"
+            f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
+            f"{pos_info}\n"
+            f"⏱ _Waktu Selesai: {now}_\n\n"
+            f"📋 *RIWAYAT TRANSAKSI:* \n{block_text}\n"
+            f"🏁 *FINAL :*\n"
+            f"🟢 *PROFIT :* {state['minute_wins']}\n"
+            f"🔴 *LOSE :* {state['minute_losses']}"
+        )
+
+    return (
+        f"🤖 *TRADE INDODAX #HUAT*\n\n"
+        f"Status Bot: {status_str}\n"
+        f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
+        f"{pos_info}\n"
+        f"⏱ _Live Updated: {now}_\n\n"
+        f"📋 *RIWAYAT TRANSAKSI (MENIT INI):*\n{block_text}\n\n"
+        f"Pilih menu di bawah ini untuk memantau atau mengendalikan bot:"
+    )
+
+# ==========================================
+# AUTO-REFRESH LIVE DASHBOARD
 # ==========================================
 def auto_refresh_dashboard_loop():
     while True:
         try:
-            if state["dashboard_msg_id"] and state["dashboard_chat_id"]:
+            if state["dashboard_chat_id"]:
                 new_text = get_home_text()
-                if new_text != state["last_rendered_text"]:
+                
+                if not state["dashboard_msg_id"]:
+                    send_menu(state["dashboard_chat_id"], new_text)
+                elif new_text != state["last_rendered_text"]:
                     res = telegram("editMessageText", {
                         "chat_id": str(state["dashboard_chat_id"]),
                         "message_id": state["dashboard_msg_id"],
@@ -155,45 +192,42 @@ def auto_refresh_dashboard_loop():
                     })
                     if res and res.get("ok"):
                         state["last_rendered_text"] = new_text
+                    elif res and not res.get("ok"):
+                        send_menu(state["dashboard_chat_id"], new_text)
         except Exception as e:
             print("Auto Refresh Error:", e)
-        time.sleep(2)  # Interval 2 detik (Batas kecepatan maksimal aman dari Telegram API)
+        time.sleep(2)
 
 # ==========================================
-# LAPORAN RUTIN PER 1 MENIT
+# RESET CHAT PER 1 MENIT & FINAL REKAP
 # ==========================================
-def minutely_report_loop():
+def minutely_reset_loop():
     while True:
         time.sleep(60)
         try:
-            status_str = "🟢 AKTIF (RUNNING)" if state["is_running"] else "🔴 BERHENTI (STOPPED)"
-            current_price = get_indodax_price() or 0
-            asset_value = state["asset_balance"] * current_price
-            total_equity = state["idr_balance"] + asset_value
-            pnl_idr = total_equity - START_BALANCE
-            pnl_percent = (pnl_idr / START_BALANCE) * 100
-            now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+            if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
+                # 1. Update chat pertama menjadi FINAL (tanpa keyboard)
+                final_text = get_home_text(is_final=True)
+                telegram("editMessageText", {
+                    "chat_id": str(state["dashboard_chat_id"]),
+                    "message_id": state["dashboard_msg_id"],
+                    "text": final_text,
+                    "parse_mode": "Markdown"
+                })
 
-            report_msg = (
-                f"⏱ *LAPORAN TOTAL RUTIN 1 MENIT*\n"
-                f"📅 *Waktu:* `{now}`\n"
-                f"⚙️ *Status Bot:* {status_str}\n"
-                f"────────────────────────\n"
-                f"🔄 *Aksi Menit Ini:* {state['trades_this_minute']} transaksi\n"
-                f"💵 *Saldo IDR:* Rp {state['idr_balance']:,.0f}\n"
-                f"🪙 *Nilai Aset ({PAIR.split('_')[0].upper()}):* Rp {asset_value:,.0f}\n"
-                f"💰 *Total Equity Saat Ini:* Rp {total_equity:,.0f}\n"
-                f"📈 *Total PnL Overall:* Rp {pnl_idr:,.0f} ({pnl_percent:+.2f}%)\n"
-                f"🎯 *Win / Loss:* {state['winning_trades']} Win / {state['losing_trades']} Loss\n"
-                f"📊 *Total Eksekusi Keseluruhan:* {state['total_trades']} x"
-            )
-            state['trades_this_minute'] = 0
-            broadcast(report_msg, include_keyboard=True)
+                # 2. Reset penghitung transaksi menit ini
+                state["minute_wins"] = 0
+                state["minute_losses"] = 0
+                state["minute_logs"] = []
+
+                # 3. Kirim chat baru sebagai dashboard lanjutan
+                new_home_text = get_home_text()
+                send_menu(state["dashboard_chat_id"], new_home_text)
         except Exception as e:
-            print("REPORT ERROR:", e)
+            print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# TRADING ENGINE (MODE LANGSUNG MAIN INSTAN)
+# TRADING ENGINE
 # ==========================================
 def trading_loop():
     print("Loop trading dinyalakan...")
@@ -202,43 +236,35 @@ def trading_loop():
             if state["is_running"]:
                 current_price = get_indodax_price()
                 if current_price:
-                    now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+                    now = datetime.now().strftime("%H:%M:%S")
 
-                    # 1. BILA BELUM PUNYA ASET -> LANGSUNG BELI INSTAN
+                    # 1. BUY INSTAN
                     if not state["in_position"] and state["idr_balance"] > 0:
                         amount_buy = state["idr_balance"] * (1 - FEE_RATE)
                         state["asset_balance"] = amount_buy / current_price
                         state["buy_price"] = current_price
                         state["idr_balance"] = 0.0
                         state["in_position"] = True
-                        state["trades_this_minute"] += 1
 
-                        broadcast(
-                            f"⚡ *LAPORAN EKSEKUSI: BUY (BELI)*\n"
-                            f"📅 *Waktu:* `{now}`\n"
-                            f"────────────────────────\n"
-                            f"• Pair: {PAIR.upper()}\n"
-                            f"• Harga Beli: Rp {current_price:,.0f}\n"
-                            f"• Target TP (+0.8%): Rp {current_price * (1 + MIN_TAKE_PROFIT):,.0f}\n"
-                            f"• Stop Loss (-1.5%): Rp {current_price * (1 - STOP_LOSS):,.0f}\n"
-                            f"• Jumlah Aset Beli: {state['asset_balance']:.6f} BTC",
-                            include_keyboard=False
-                        )
+                        log_entry = f"[{now}] BUY  @ Rp {current_price:,.0f}"
+                        state["minute_logs"].append(log_entry)
 
-                    # 2. BILA SUDAH MEMEGANG ASET -> PANTAU PROFIT / LOSS
+                    # 2. SELL (TAKE PROFIT / STOP LOSS)
                     elif state["in_position"]:
                         pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
                         should_sell = False
-                        reason = ""
+                        is_win = False
 
                         if pnl_pct >= MIN_TAKE_PROFIT:
                             should_sell = True
-                            reason = f"PROFIT (+{pnl_pct*100:.2f}%)"
+                            is_win = True
                             state["winning_trades"] += 1
+                            state["minute_wins"] += 1
                         elif pnl_pct <= -STOP_LOSS:
                             should_sell = True
-                            reason = f"STOP LOSS ({pnl_pct*100:.2f}%)"
+                            is_win = False
                             state["losing_trades"] += 1
+                            state["minute_losses"] += 1
 
                         if should_sell:
                             gross = state["asset_balance"] * current_price
@@ -249,18 +275,10 @@ def trading_loop():
                             state["asset_balance"] = 0.0
                             state["in_position"] = False
                             state["total_trades"] += 1
-                            state["trades_this_minute"] += 1
 
-                            broadcast(
-                                f"🎯 *LAPORAN EKSEKUSI: SELL ({reason})*\n"
-                                f"📅 *Waktu:* `{now}`\n"
-                                f"────────────────────────\n"
-                                f"• Harga Beli Awal: Rp {state['buy_price']:,.0f}\n"
-                                f"• Harga Jual: Rp {current_price:,.0f}\n"
-                                f"• Hasil PnL Transaksi: Rp {pnl_idr:,.0f}\n"
-                                f"• Saldo Cash IDR Sekarang: Rp {state['idr_balance']:,.0f}",
-                                include_keyboard=False
-                            )
+                            tag = "SELL PROFIT" if is_win else "SELL LOSS"
+                            log_entry = f"[{now}] {tag} @ Rp {current_price:,.0f} ({pnl_idr:+,.0f})"
+                            state["minute_logs"].append(log_entry)
         except Exception as e:
             print("TRADING ERROR:", e)
 
@@ -269,24 +287,6 @@ def trading_loop():
 # ==========================================
 # TELEGRAM HANDLER
 # ==========================================
-def get_home_text():
-    status_str = "🟢 *AKTIF (RUNNING)*" if state["is_running"] else "🔴 *BERHENTI (STOPPED)*"
-    price = get_indodax_price() or 0
-    asset_val = state["asset_balance"] * price
-    total_equity = state["idr_balance"] + asset_val
-    now = datetime.now().strftime("%H:%M:%S")
-
-    pos_info = "⚡ *Posisi:* Beli BTC @ Rp {:,.0f}".format(state["buy_price"]) if state["in_position"] else "💵 *Posisi:* Cash IDR Ready"
-
-    return (
-        f"🤖 *TRADE INDODAX #HUAT*\n\n"
-        f"Status Bot: {status_str}\n"
-        f"💰 *Saldo Saat Ini:* Rp {total_equity:,.0f}\n"
-        f"{pos_info}\n"
-        f"⏱ _Live Updated: {now}_\n\n"
-        f"Pilih menu di bawah ini untuk memantau atau mengendalikan bot:"
-    )
-
 def get_status_text():
     price = get_indodax_price() or 0
     status_str = "🟢 Aktif Running" if state["is_running"] else "🔴 Berhenti (Stopped)"
@@ -297,14 +297,14 @@ def get_balance_text():
     price = get_indodax_price() or 0
     asset_val = state["asset_balance"] * price
     equity = state["idr_balance"] + asset_val
-    return f"💰 *SALDO DEMO*\n\n• Cash IDR: Rp {state['idr_balance']:,.0f}\n• Nilai Aset: Rp {asset_val:,.0f}\n• Total Equity: Rp {equity:,.0f}"
+    return f"💰 *SALDO DEMO*\n\n• Cash IDR: Rp {state['idr_balance']:,.2f}\n• Nilai Aset: Rp {asset_val:,.2f}\n• Total Equity: Rp {equity:,.2f}"
 
 def get_report_text():
     price = get_indodax_price() or 0
     equity = state["idr_balance"] + (state["asset_balance"] * price)
     pnl = equity - START_BALANCE
     pct = (pnl / START_BALANCE) * 100
-    return f"📈 *LAPORAN PERFORMA*\n\n• Modal Awal: Rp {START_BALANCE:,.0f}\n• Total Equity: Rp {equity:,.0f}\n• Total PnL: Rp {pnl:,.0f} ({pct:+.2f}%)\n• Win/Loss: {state['winning_trades']} Win / {state['losing_trades']} Loss"
+    return f"📈 *LAPORAN PERFORMA*\n\n• Modal Awal: Rp {START_BALANCE:,.2f}\n• Total Equity: Rp {equity:,.2f}\n• Total PnL: Rp {pnl:,.2f} ({pct:+.2f}%)\n• Win/Loss: {state['winning_trades']} Win / {state['losing_trades']} Loss"
 
 def handle_update(update):
     if "callback_query" in update:
@@ -318,12 +318,10 @@ def handle_update(update):
             state["is_running"] = True
             answer_callback(cb_id, "▶️ Bot Berhasil Dijalankan!")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
-            broadcast("▶️ *BOT DIMAINIKAN (START)*\nBot mulai mencari sinyal beli di Indodax...", include_keyboard=False)
         elif data == "btn_stop":
             state["is_running"] = False
             answer_callback(cb_id, "⏹ Bot Berhasil Dihentikan!")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
-            broadcast("⏹ *BOT DIHENTIKAN (STOP)*\nBot tidak akan melakukan eksekusi transaksi sampai Anda menjalankannya kembali.", include_keyboard=False)
         else:
             answer_callback(cb_id)
 
@@ -348,8 +346,6 @@ def handle_update(update):
 
         if text.startswith("/start") or text.startswith("/menu"):
             send_menu(chat_id, get_home_text())
-        elif text.startswith("/id"):
-            telegram("sendMessage", {"chat_id": str(chat_id), "text": f"ID Anda: `{chat_id}`", "parse_mode": "Markdown"})
 
 def polling():
     offset = None
@@ -370,6 +366,6 @@ def polling():
 
 if __name__ == "__main__":
     threading.Thread(target=trading_loop, daemon=True).start()
-    threading.Thread(target=minutely_report_loop, daemon=True).start()
+    threading.Thread(target=minutely_reset_loop, daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     polling()
