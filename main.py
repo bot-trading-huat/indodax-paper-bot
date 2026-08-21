@@ -70,7 +70,7 @@ def get_main_keyboard():
     }
 
 def get_back_keyboard():
-    """Tombol Kembali / Home agar antarmuka tidak lag"""
+    """Tombol Kembali / Home"""
     return {
         "inline_keyboard": [
             [{"text": "🏠 Tampilan Utama (Kembali)", "callback_data": "btn_home"}]
@@ -167,7 +167,6 @@ def analyze_signal(current_price):
     if len(state["price_history"]) > 10:
         state["price_history"].pop(0)
     
-    # Pengkondisian agar bot cepat melakukan transaksi eksekusi awal
     if len(state["price_history"]) < 2:
         return "BUY"
 
@@ -180,7 +179,6 @@ def trading_loop():
     print("Loop trading dinyalakan...")
     while True:
         try:
-            # Hanya jalankan analisis jika bot dalam status PLAY (is_running = True)
             if state["is_running"]:
                 current_price = get_indodax_price()
                 if current_price:
@@ -255,7 +253,18 @@ def trading_loop():
 # ==========================================
 def get_home_text():
     status_str = "🟢 *AKTIF (RUNNING)*" if state["is_running"] else "🔴 *BERHENTI (STOPPED)*"
-    return f"🤖 *STAFF AG TRADING DASHBOARD*\n\nStatus Bot: {status_str}\nPilih menu di bawah ini untuk memantau atau mengendalikan bot:"
+    
+    # Hitung total saldo otomatis (IDR + Nilai BTC)
+    price = get_indodax_price() or 0
+    asset_val = state["asset_balance"] * price
+    total_equity = state["idr_balance"] + asset_val
+
+    return (
+        f"🤖 *TRADE INDODAX #HUAT*\n\n"
+        f"Status Bot: {status_str}\n"
+        f"💰 *Saldo Saat Ini:* Rp {total_equity:,.0f}\n\n"
+        f"Pilih menu di bawah ini untuk memantau atau mengendalikan bot:"
+    )
 
 def get_status_text():
     price = get_indodax_price() or 0
