@@ -148,7 +148,7 @@ def get_home_text(is_final=False):
         logs_str = "\n".join(state["minute_logs"][-8:])
         block_text = f"```\n{logs_str}\n```"
     else:
-        block_text = "```\nMenunggu eksekusi transaksi...\n```"
+        block_text = "```\nTidak ada aktivitas transaksi...\n```"
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
@@ -183,7 +183,8 @@ def get_home_text(is_final=False):
 def auto_refresh_dashboard_loop():
     while True:
         try:
-            if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
+            # HANYA REFRESH JIKA BOT DALAM KEADAAN ACTIVE (RUNNING)
+            if state["is_running"] and state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 new_text = get_home_text()
                 if new_text != state["last_rendered_text"]:
                     res = telegram("editMessageText", {
@@ -206,7 +207,8 @@ def minutely_reset_loop():
     while True:
         time.sleep(60)
         try:
-            if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
+            # HANYA BUAT CHAT BARU PER MENIT JIKA BOT SEDANG RUNNING
+            if state["is_running"] and state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 old_msg_id = state["dashboard_msg_id"]
                 final_text = get_home_text(is_final=True)
                 
