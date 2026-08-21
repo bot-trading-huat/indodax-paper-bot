@@ -150,7 +150,7 @@ def get_home_text(is_final=False):
         logs_str = "\n".join(state["minute_logs"][-8:])
         block_text = f"```\n{logs_str}\n```"
     else:
-        block_text = "```\nMemulai transaksi scalping...\n```"
+        block_text = "```\nMemulai strategi active-safety...\n```"
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
@@ -233,10 +233,11 @@ def minutely_reset_loop():
             print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# ENGINE TRADING KONTINU (BERMAIN TERUS & ALAMI)
+# ENGINE TRADING: ACTIVE, SAFETY & TRAILING PROFIT
 # ==========================================
 def trading_loop():
-    print("Engine Trading Kontinu Aktif...")
+    print("Engine Active-Safety Trading Aktif...")
+    highest_price = 0.0
 
     while True:
         try:
@@ -245,9 +246,11 @@ def trading_loop():
                 now_wib = get_wib_time()
 
                 if current_price > 0:
-                    # 1. KONDISI BELI: Jika tidak sedang pegang posisi, langsung BELI (Entry Cepat)
+                    # 1. KONDISI BELI (ENTRY): Beli langsung jika saldo IDR cukup & tidak memegang posisi
                     if not state["in_position"] and state["idr_balance"] > 1000:
                         state["buy_price"] = current_price
+                        highest_price = current_price
+                        
                         net_idr = state["idr_balance"] * (1 - FEE_RATE)  # Potong Fee Beli 0.21%
                         state["asset_balance"] = net_idr / current_price
                         state["idr_balance"] = 0.0
@@ -256,13 +259,27 @@ def trading_loop():
                         log_entry = f"[{now_wib}] BUY  @ Rp {current_price:,.0f}"
                         state["minute_logs"].append(log_entry)
 
-                    # 2. KONDISI JUAL: Mengecek perubahan harga aktual Indodax vs harga beli
+                    # 2. KONDISI KELOLA POSISI (SAFETY & TRAILING PROFIT)
                     elif state["in_position"]:
-                        price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
+                        # Perbarui harga tertinggi jika pasar terus meroket naik
+                        if current_price > highest_price:
+                            highest_price = current_price
 
-                        # Eksekusi JUAL jika harga bergerak (naik untuk Profit, turun untuk Cut Loss)
-                        # atau jika sudah bertahan dalam kurun waktu tertentu
-                        if abs(price_change_pct) >= 0.0005 or price_change_pct != 0:
+                        price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
+                        drop_from_peak = (highest_price - current_price) / highest_price if highest_price > 0 else 0
+
+                        # ATURAN EKSEKUSI JUAL:
+                        # A. Minimal Profit Safety: Kenaikan +0.6% (Menutup fee 0.42% + Untung Bersih)
+                        # B. Trailing Profit: Jika sudah naik tinggi (>1%) lalu koreksi 0.3% dari puncak -> Eksekusi JUAL!
+                        # C. Target Profit Tinggi: Langsung kunci jika naik signifikan (+3.0%)
+                        # D. Stop Loss Safety: Cut loss jika pasar mendadak anjlok (-2.0%)
+                        
+                        is_profit_safe = price_change_pct >= 0.006
+                        is_trailing_triggered = (highest_price >= state["buy_price"] * 1.01) and (drop_from_peak >= 0.003)
+                        is_big_target = price_change_pct >= 0.03
+                        is_stop_loss = price_change_pct <= -0.02
+
+                        if (is_profit_safe and is_trailing_triggered) or is_big_target or (is_profit_safe and drop_from_peak >= 0.002) or is_stop_loss:
                             gross = state["asset_balance"] * current_price
                             net_idr = gross * (1 - FEE_RATE)  # Potong Fee Jual 0.21%
                             
@@ -272,6 +289,7 @@ def trading_loop():
                             state["asset_balance"] = 0.0
                             state["in_position"] = False
                             state["total_trades"] += 1
+                            highest_price = 0.0
 
                             if pnl_idr > 0:
                                 state["winning_trades"] += 1
@@ -288,7 +306,7 @@ def trading_loop():
         except Exception as e:
             print("ENGINE ERROR:", e)
 
-        time.sleep(2)  # Interval pemeriksaan harga per 2 detik
+        time.sleep(2) # Cek pergerakan harga setiap 2 detik
 
 # ==========================================
 # TELEGRAM HANDLER
