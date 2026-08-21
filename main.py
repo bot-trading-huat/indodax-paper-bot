@@ -1,7 +1,6 @@
 import os
 import time
 import json
-import random
 import threading
 import urllib.request
 import urllib.parse
@@ -25,7 +24,7 @@ ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 START_BALANCE = float(os.getenv("START_BALANCE", 100000))
 PAIR = os.getenv("PAIR", "btc_idr").lower()
-FEE_RATE = float(os.getenv("FEE_RATE", 0.0021))
+FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) # Fee Indodax 0.21%
 
 state = {
     "is_running": True,
@@ -42,7 +41,8 @@ state = {
     "minute_logs": [],
     "dashboard_msg_id": None,
     "dashboard_chat_id": ALLOWED_CHAT_ID,
-    "last_rendered_text": ""
+    "last_rendered_text": "",
+    "last_market_price": 0.0
 }
 
 # ==========================================
@@ -127,10 +127,12 @@ def get_indodax_price():
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return float(data["ticker"]["last"])
+            price = float(data["ticker"]["last"])
+            state["last_market_price"] = price
+            return price
     except Exception as e:
         print("Error fetch price:", e)
-        return 1350000000.0
+        return state["last_market_price"] or 1350000000.0
 
 # ==========================================
 # DASHBOARD TEXT BUILDER
@@ -142,13 +144,13 @@ def get_home_text(is_final=False):
     total_equity = state["idr_balance"] + asset_val
     now_wib = get_wib_time()
 
-    pos_info = "⚡ *Posisi:* Scalping (Memegang BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Cash Ready)"
+    pos_info = "⚡ *Posisi:* Scalping (Holding BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Persiapan Beli)"
 
     if state["minute_logs"]:
         logs_str = "\n".join(state["minute_logs"][-8:])
         block_text = f"```\n{logs_str}\n```"
     else:
-        block_text = "```\nTidak ada aktivitas transaksi...\n```"
+        block_text = "```\nMemulai transaksi scalping...\n```"
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
@@ -183,7 +185,6 @@ def get_home_text(is_final=False):
 def auto_refresh_dashboard_loop():
     while True:
         try:
-            # HANYA REFRESH JIKA BOT DALAM KEADAAN ACTIVE (RUNNING)
             if state["is_running"] and state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 new_text = get_home_text()
                 if new_text != state["last_rendered_text"]:
@@ -207,7 +208,6 @@ def minutely_reset_loop():
     while True:
         time.sleep(60)
         try:
-            # HANYA BUAT CHAT BARU PER MENIT JIKA BOT SEDANG RUNNING
             if state["is_running"] and state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 old_msg_id = state["dashboard_msg_id"]
                 final_text = get_home_text(is_final=True)
@@ -233,56 +233,62 @@ def minutely_reset_loop():
             print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# ENGINE TRADING SCALPING
+# ENGINE TRADING KONTINU (BERMAIN TERUS & ALAMI)
 # ==========================================
 def trading_loop():
-    print("Engine Trading Aktif...")
-    base_price = get_indodax_price() or 1350000000.0
+    print("Engine Trading Kontinu Aktif...")
 
     while True:
         try:
             if state["is_running"]:
+                current_price = get_indodax_price()
                 now_wib = get_wib_time()
 
-                if not state["in_position"] and state["idr_balance"] > 0:
-                    state["buy_price"] = base_price * (1 + random.uniform(-0.001, 0.001))
-                    amount_buy = state["idr_balance"] * (1 - FEE_RATE)
-                    state["asset_balance"] = amount_buy / state["buy_price"]
-                    state["idr_balance"] = 0.0
-                    state["in_position"] = True
+                if current_price > 0:
+                    # 1. KONDISI BELI: Jika tidak sedang pegang posisi, langsung BELI (Entry Cepat)
+                    if not state["in_position"] and state["idr_balance"] > 1000:
+                        state["buy_price"] = current_price
+                        net_idr = state["idr_balance"] * (1 - FEE_RATE)  # Potong Fee Beli 0.21%
+                        state["asset_balance"] = net_idr / current_price
+                        state["idr_balance"] = 0.0
+                        state["in_position"] = True
 
-                    log_entry = f"[{now_wib}] BUY  @ Rp {state['buy_price']:,.0f}"
-                    state["minute_logs"].append(log_entry)
+                        log_entry = f"[{now_wib}] BUY  @ Rp {current_price:,.0f}"
+                        state["minute_logs"].append(log_entry)
 
-                elif state["in_position"]:
-                    pct_change = random.choice([0.015, 0.018, 0.022, -0.008, 0.025, 0.012, -0.005])
-                    sell_price = state["buy_price"] * (1 + pct_change)
+                    # 2. KONDISI JUAL: Mengecek perubahan harga aktual Indodax vs harga beli
+                    elif state["in_position"]:
+                        price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
 
-                    gross = state["asset_balance"] * sell_price
-                    net = gross * (1 - FEE_RATE)
-                    pnl_idr = net - (state["asset_balance"] * state["buy_price"])
+                        # Eksekusi JUAL jika harga bergerak (naik untuk Profit, turun untuk Cut Loss)
+                        # atau jika sudah bertahan dalam kurun waktu tertentu
+                        if abs(price_change_pct) >= 0.0005 or price_change_pct != 0:
+                            gross = state["asset_balance"] * current_price
+                            net_idr = gross * (1 - FEE_RATE)  # Potong Fee Jual 0.21%
+                            
+                            pnl_idr = net_idr - (state["asset_balance"] * state["buy_price"])
 
-                    state["idr_balance"] = net
-                    state["asset_balance"] = 0.0
-                    state["in_position"] = False
-                    state["total_trades"] += 1
+                            state["idr_balance"] = net_idr
+                            state["asset_balance"] = 0.0
+                            state["in_position"] = False
+                            state["total_trades"] += 1
 
-                    if pnl_idr > 0:
-                        state["winning_trades"] += 1
-                        state["minute_wins"] += 1
-                        tag = "SELL PROFIT"
-                    else:
-                        state["losing_trades"] += 1
-                        state["minute_losses"] += 1
-                        tag = "SELL LOSS"
+                            if pnl_idr > 0:
+                                state["winning_trades"] += 1
+                                state["minute_wins"] += 1
+                                tag = "SELL PROFIT"
+                            else:
+                                state["losing_trades"] += 1
+                                state["minute_losses"] += 1
+                                tag = "SELL LOSS"
 
-                    log_entry = f"[{now_wib}] {tag} @ Rp {sell_price:,.0f} ({pnl_idr:+,.0f})"
-                    state["minute_logs"].append(log_entry)
+                            log_entry = f"[{now_wib}] {tag} @ Rp {current_price:,.0f} ({pnl_idr:+,.0f})"
+                            state["minute_logs"].append(log_entry)
 
         except Exception as e:
             print("ENGINE ERROR:", e)
 
-        time.sleep(0.5)
+        time.sleep(2)  # Interval pemeriksaan harga per 2 detik
 
 # ==========================================
 # TELEGRAM HANDLER
@@ -290,7 +296,7 @@ def trading_loop():
 def get_status_text():
     price = get_indodax_price() or 0
     status_str = "🟢 Berjalan (Active)" if state["is_running"] else "🔴 Berhenti (Stopped)"
-    pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Standby (Cash Ready)"
+    pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Standby (Persiapan Beli)"
     return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: {PAIR.upper()}\n• Harga BTC saat ini: Rp {price:,.0f}\n• Posisi: {pos}"
 
 def get_balance_text():
