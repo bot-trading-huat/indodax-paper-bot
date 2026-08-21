@@ -6,6 +6,10 @@ import urllib.request
 import urllib.parse
 from datetime import datetime
 
+# Force Python output agar langsung muncul di log Railway tanpa buffering
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
 # ==========================================
 # CONFIGURATION & STATE MANAGEMENT
 # ==========================================
@@ -21,6 +25,7 @@ STOP_LOSS = float(os.getenv("STOP_LOSS", 0.015))
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", 2))
 
 state = {
+    "is_running": True,  # Status aktif bot (True = Play, False = Stop)
     "idr_balance": START_BALANCE,
     "asset_balance": 0.0,
     "in_position": False,
@@ -48,9 +53,15 @@ def telegram(method, params=None):
         return None
 
 def get_main_keyboard():
-    """Menu Utama Inline Keyboard"""
+    """Menu Utama Inline Keyboard dengan Tombol Play / Stop"""
+    play_stop_btn = (
+        {"text": "⏹ Stop Bot", "callback_data": "btn_stop"}
+        if state["is_running"]
+        else {"text": "▶️ Mainkan Bot (Start)", "callback_data": "btn_start"}
+    )
     return {
         "inline_keyboard": [
+            [play_stop_btn],
             [{"text": "📊 Status Bot & Posisi", "callback_data": "btn_status"}],
             [{"text": "💰 Cek Saldo Demo", "callback_data": "btn_balance"}],
             [{"text": "📈 Laporan PnL & WinRate", "callback_data": "btn_report"}],
@@ -84,8 +95,11 @@ def update_menu(chat_id, message_id, text, is_home=False):
         "reply_markup": markup
     })
 
-def answer_callback(callback_query_id):
-    return telegram("answerCallbackQuery", {"callback_query_id": callback_query_id})
+def answer_callback(callback_query_id, text=None):
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    return telegram("answerCallbackQuery", payload)
 
 def broadcast(text, include_keyboard=True):
     if ALLOWED_CHAT_ID:
@@ -108,7 +122,8 @@ def get_indodax_price():
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return float(data["ticker"]["last"])
-    except Exception:
+    except Exception as e:
+        print("Error fetch price:", e)
         return None
 
 # ==========================================
@@ -118,6 +133,7 @@ def minutely_report_loop():
     while True:
         time.sleep(60)
         try:
+            status_str = "🟢 AKTIF (RUNNING)" if state["is_running"] else "🔴 BERHENTI (STOPPED)"
             current_price = get_indodax_price() or 0
             asset_value = state["asset_balance"] * current_price
             total_equity = state["idr_balance"] + asset_value
@@ -128,6 +144,7 @@ def minutely_report_loop():
             report_msg = (
                 f"⏱ *LAPORAN TOTAL RUTIN 1 MENIT*\n"
                 f"📅 *Waktu:* `{now}`\n"
+                f"⚙️ *Status Bot:* {status_str}\n"
                 f"────────────────────────\n"
                 f"🔄 *Aksi Menit Ini:* {state['trades_this_minute']} transaksi\n"
                 f"💵 *Saldo IDR:* Rp {state['idr_balance']:,.0f}\n"
@@ -149,80 +166,85 @@ def analyze_signal(current_price):
     state["price_history"].append(current_price)
     if len(state["price_history"]) > 10:
         state["price_history"].pop(0)
-    if len(state["price_history"]) < 5:
-        return "WAIT"
+    
+    # Pengkondisian agar bot cepat melakukan transaksi eksekusi awal
+    if len(state["price_history"]) < 2:
+        return "BUY"
 
     avg_price = sum(state["price_history"]) / len(state["price_history"])
-    if current_price > avg_price and state["price_history"][-1] > state["price_history"][-2]:
+    if current_price >= avg_price:
         return "BUY"
     return "WAIT"
 
 def trading_loop():
+    print("Loop trading dinyalakan...")
     while True:
         try:
-            current_price = get_indodax_price()
-            if current_price:
-                now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+            # Hanya jalankan analisis jika bot dalam status PLAY (is_running = True)
+            if state["is_running"]:
+                current_price = get_indodax_price()
+                if current_price:
+                    now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-                # 1. LAPORAN SEKETIKA SAAT BOT MEMBELI
-                if not state["in_position"]:
-                    if analyze_signal(current_price) == "BUY":
-                        amount_buy = state["idr_balance"] * (1 - FEE_RATE)
-                        state["asset_balance"] = amount_buy / current_price
-                        state["buy_price"] = current_price
-                        state["idr_balance"] = 0.0
-                        state["in_position"] = True
-                        state["trades_this_minute"] += 1
+                    # 1. LAPORAN SEKETIKA SAAT BOT MEMBELI
+                    if not state["in_position"]:
+                        if analyze_signal(current_price) == "BUY":
+                            amount_buy = state["idr_balance"] * (1 - FEE_RATE)
+                            state["asset_balance"] = amount_buy / current_price
+                            state["buy_price"] = current_price
+                            state["idr_balance"] = 0.0
+                            state["in_position"] = True
+                            state["trades_this_minute"] += 1
 
-                        broadcast(
-                            f"⚡ *LAPORAN EKSEKUSI: BUY (BELI)*\n"
-                            f"📅 *Waktu:* `{now}`\n"
-                            f"────────────────────────\n"
-                            f"• Pair: {PAIR.upper()}\n"
-                            f"• Harga Beli: Rp {current_price:,.0f}\n"
-                            f"• Target TP (+0.8%): Rp {current_price * (1 + MIN_TAKE_PROFIT):,.0f}\n"
-                            f"• Stop Loss (-1.5%): Rp {current_price * (1 - STOP_LOSS):,.0f}\n"
-                            f"• Jumlah Aset Beli: {state['asset_balance']:.6f} BTC",
-                            include_keyboard=False
-                        )
+                            broadcast(
+                                f"⚡ *LAPORAN EKSEKUSI: BUY (BELI)*\n"
+                                f"📅 *Waktu:* `{now}`\n"
+                                f"────────────────────────\n"
+                                f"• Pair: {PAIR.upper()}\n"
+                                f"• Harga Beli: Rp {current_price:,.0f}\n"
+                                f"• Target TP (+0.8%): Rp {current_price * (1 + MIN_TAKE_PROFIT):,.0f}\n"
+                                f"• Stop Loss (-1.5%): Rp {current_price * (1 - STOP_LOSS):,.0f}\n"
+                                f"• Jumlah Aset Beli: {state['asset_balance']:.6f} BTC",
+                                include_keyboard=False
+                            )
 
-                # 2. LAPORAN SEKETIKA SAAT BOT MENJUAL
-                elif state["in_position"]:
-                    pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
-                    should_sell = False
-                    reason = ""
+                    # 2. LAPORAN SEKETIKA SAAT BOT MENJUAL
+                    elif state["in_position"]:
+                        pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
+                        should_sell = False
+                        reason = ""
 
-                    if pnl_pct >= MIN_TAKE_PROFIT:
-                        should_sell = True
-                        reason = f"PROFIT (+{pnl_pct*100:.2f}%)"
-                        state["winning_trades"] += 1
-                    elif pnl_pct <= -STOP_LOSS:
-                        should_sell = True
-                        reason = f"STOP LOSS ({pnl_pct*100:.2f}%)"
-                        state["losing_trades"] += 1
+                        if pnl_pct >= MIN_TAKE_PROFIT:
+                            should_sell = True
+                            reason = f"PROFIT (+{pnl_pct*100:.2f}%)"
+                            state["winning_trades"] += 1
+                        elif pnl_pct <= -STOP_LOSS:
+                            should_sell = True
+                            reason = f"STOP LOSS ({pnl_pct*100:.2f}%)"
+                            state["losing_trades"] += 1
 
-                    if should_sell:
-                        gross = state["asset_balance"] * current_price
-                        net = gross * (1 - FEE_RATE)
-                        pnl_idr = net - (state["asset_balance"] * state["buy_price"])
+                        if should_sell:
+                            gross = state["asset_balance"] * current_price
+                            net = gross * (1 - FEE_RATE)
+                            pnl_idr = net - (state["asset_balance"] * state["buy_price"])
 
-                        state["idr_balance"] = net
-                        state["asset_balance"] = 0.0
-                        state["in_position"] = False
-                        state["total_trades"] += 1
-                        state["trades_this_minute"] += 1
-                        state["price_history"].clear()
+                            state["idr_balance"] = net
+                            state["asset_balance"] = 0.0
+                            state["in_position"] = False
+                            state["total_trades"] += 1
+                            state["trades_this_minute"] += 1
+                            state["price_history"].clear()
 
-                        broadcast(
-                            f"🎯 *LAPORAN EKSEKUSI: SELL ({reason})*\n"
-                            f"📅 *Waktu:* `{now}`\n"
-                            f"────────────────────────\n"
-                            f"• Harga Beli Awal: Rp {state['buy_price']:,.0f}\n"
-                            f"• Harga Jual: Rp {current_price:,.0f}\n"
-                            f"• Hasil PnL Transaksi: Rp {pnl_idr:,.0f}\n"
-                            f"• Saldo Cash IDR Sekarang: Rp {state['idr_balance']:,.0f}",
-                            include_keyboard=False
-                        )
+                            broadcast(
+                                f"🎯 *LAPORAN EKSEKUSI: SELL ({reason})*\n"
+                                f"📅 *Waktu:* `{now}`\n"
+                                f"────────────────────────\n"
+                                f"• Harga Beli Awal: Rp {state['buy_price']:,.0f}\n"
+                                f"• Harga Jual: Rp {current_price:,.0f}\n"
+                                f"• Hasil PnL Transaksi: Rp {pnl_idr:,.0f}\n"
+                                f"• Saldo Cash IDR Sekarang: Rp {state['idr_balance']:,.0f}",
+                                include_keyboard=False
+                            )
         except Exception as e:
             print("TRADING ERROR:", e)
 
@@ -232,12 +254,14 @@ def trading_loop():
 # TELEGRAM HANDLER
 # ==========================================
 def get_home_text():
-    return "🤖 *STAFF AG TRADING DASHBOARD*\n\nPilih menu di bawah ini untuk memantau aktivitas bot:"
+    status_str = "🟢 *AKTIF (RUNNING)*" if state["is_running"] else "🔴 *BERHENTI (STOPPED)*"
+    return f"🤖 *STAFF AG TRADING DASHBOARD*\n\nStatus Bot: {status_str}\nPilih menu di bawah ini untuk memantau atau mengendalikan bot:"
 
 def get_status_text():
     price = get_indodax_price() or 0
+    status_str = "🟢 Aktif Running" if state["is_running"] else "🔴 Berhenti (Stopped)"
     pos = f"Sedang Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Mencari Sinyal Beli (Cash Ready)"
-    return f"📊 *STATUS BOT*\n\n• Pair: {PAIR.upper()}\n• Harga BTC: Rp {price:,.0f}\n• Posisi: {pos}"
+    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: {PAIR.upper()}\n• Harga BTC: Rp {price:,.0f}\n• Posisi: {pos}"
 
 def get_balance_text():
     price = get_indodax_price() or 0
@@ -260,7 +284,18 @@ def handle_update(update):
         msg_id = cb["message"]["message_id"]
         data = cb.get("data", "")
 
-        answer_callback(cb_id)
+        if data == "btn_start":
+            state["is_running"] = True
+            answer_callback(cb_id, "▶️ Bot Berhasil Dijalankan!")
+            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+            broadcast("▶️ *BOT DIMAINIKAN (START)*\nBot mulai mencari sinyal beli di Indodax...", include_keyboard=False)
+        elif data == "btn_stop":
+            state["is_running"] = False
+            answer_callback(cb_id, "⏹ Bot Berhasil Dihentikan!")
+            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+            broadcast("⏹ *BOT DIHENTIKAN (STOP)*\nBot tidak akan melakukan eksekusi transaksi sampai Anda menjalankannya kembali.", include_keyboard=False)
+        else:
+            answer_callback(cb_id)
 
         if data == "btn_home":
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
@@ -289,6 +324,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
+    print("Bot Polling Telegram dimulai...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
@@ -299,6 +335,7 @@ def polling():
                     offset = upd["update_id"] + 1
                     handle_update(upd)
         except Exception as e:
+            print("POLLING ERROR:", e)
             time.sleep(5)
 
 if __name__ == "__main__":
