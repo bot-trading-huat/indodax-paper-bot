@@ -24,7 +24,7 @@ ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 START_BALANCE = float(os.getenv("START_BALANCE", 100000))
 PAIR = os.getenv("PAIR", "btc_idr").lower()
-FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) # Fee Indodax 0.21%
+FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) # Fee Indodax 0.21% (Beli/Jual)
 
 state = {
     "is_running": True,
@@ -150,7 +150,7 @@ def get_home_text(is_final=False):
         logs_str = "\n".join(state["minute_logs"][-8:])
         block_text = f"```\n{logs_str}\n```"
     else:
-        block_text = "```\nMemulai strategi active-safety...\n```"
+        block_text = "```\nMenunggu sinyal transaksi aktif...\n```"
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
@@ -233,10 +233,10 @@ def minutely_reset_loop():
             print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# ENGINE TRADING: ACTIVE, SAFETY & TRAILING PROFIT
+# ENGINE TRADING: TARGET 10% HARIAN & SAFETY
 # ==========================================
 def trading_loop():
-    print("Engine Active-Safety Trading Aktif...")
+    print("Engine Trading Target 10% Aktif...")
     highest_price = 0.0
 
     while True:
@@ -246,7 +246,7 @@ def trading_loop():
                 now_wib = get_wib_time()
 
                 if current_price > 0:
-                    # 1. KONDISI BELI (ENTRY): Beli langsung jika saldo IDR cukup & tidak memegang posisi
+                    # 1. KONDISI BELI (ENTRY): Langsung eksekusi buy jika standby & saldo cukup
                     if not state["in_position"] and state["idr_balance"] > 1000:
                         state["buy_price"] = current_price
                         highest_price = current_price
@@ -259,27 +259,23 @@ def trading_loop():
                         log_entry = f"[{now_wib}] BUY  @ Rp {current_price:,.0f}"
                         state["minute_logs"].append(log_entry)
 
-                    # 2. KONDISI KELOLA POSISI (SAFETY & TRAILING PROFIT)
+                    # 2. KONDISI JUAL (TAKE PROFIT / TRAILING / STOP LOSS)
                     elif state["in_position"]:
-                        # Perbarui harga tertinggi jika pasar terus meroket naik
                         if current_price > highest_price:
                             highest_price = current_price
 
                         price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
                         drop_from_peak = (highest_price - current_price) / highest_price if highest_price > 0 else 0
 
-                        # ATURAN EKSEKUSI JUAL:
-                        # A. Minimal Profit Safety: Kenaikan +0.6% (Menutup fee 0.42% + Untung Bersih)
-                        # B. Trailing Profit: Jika sudah naik tinggi (>1%) lalu koreksi 0.3% dari puncak -> Eksekusi JUAL!
-                        # C. Target Profit Tinggi: Langsung kunci jika naik signifikan (+3.0%)
-                        # D. Stop Loss Safety: Cut loss jika pasar mendadak anjlok (-2.0%)
-                        
-                        is_profit_safe = price_change_pct >= 0.006
-                        is_trailing_triggered = (highest_price >= state["buy_price"] * 1.01) and (drop_from_peak >= 0.003)
-                        is_big_target = price_change_pct >= 0.03
-                        is_stop_loss = price_change_pct <= -0.02
+                        # Aturan Eksekusi Optimal Target 10% & Safety:
+                        # - Take Profit Target: Tercapai kenaikan +1.2% (Menutup fee 0.42% + bersih ~0.8%)
+                        # - Trailing Stop Cepat: Jika harga sempat naik tipis lalu koreksi turun 0.2% dari puncak
+                        # - Stop Loss Safety: Cut loss di -1.5% untuk pengaman modal agar tidak boncos dalam
+                        is_target_hit = price_change_pct >= 0.012
+                        is_trailing = (highest_price >= state["buy_price"] * 1.015) and (drop_from_peak >= 0.002)
+                        is_stop_loss = price_change_pct <= -0.015
 
-                        if (is_profit_safe and is_trailing_triggered) or is_big_target or (is_profit_safe and drop_from_peak >= 0.002) or is_stop_loss:
+                        if is_target_hit or is_trailing or is_stop_loss:
                             gross = state["asset_balance"] * current_price
                             net_idr = gross * (1 - FEE_RATE)  # Potong Fee Jual 0.21%
                             
@@ -306,7 +302,7 @@ def trading_loop():
         except Exception as e:
             print("ENGINE ERROR:", e)
 
-        time.sleep(2) # Cek pergerakan harga setiap 2 detik
+        time.sleep(2) # Cek harga setiap 2 detik
 
 # ==========================================
 # TELEGRAM HANDLER
