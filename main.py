@@ -25,7 +25,7 @@ STOP_LOSS = float(os.getenv("STOP_LOSS", 0.015))
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", 2))
 
 state = {
-    "is_running": True,  # Status aktif bot (True = Play, False = Stop)
+    "is_running": True,
     "idr_balance": START_BALANCE,
     "asset_balance": 0.0,
     "in_position": False,
@@ -35,6 +35,9 @@ state = {
     "trades_this_minute": 0,
     "winning_trades": 0,
     "losing_trades": 0,
+    "dashboard_msg_id": None, # Untuk menyimpan ID pesan dashboard aktif
+    "dashboard_chat_id": None,
+    "last_rendered_text": ""   # Mencegah edit berlebihan jika teks sama
 }
 
 # ==========================================
@@ -53,7 +56,6 @@ def telegram(method, params=None):
         return None
 
 def get_main_keyboard():
-    """Menu Utama Inline Keyboard dengan Tombol Play / Stop"""
     play_stop_btn = (
         {"text": "⏹ Stop Bot", "callback_data": "btn_stop"}
         if state["is_running"]
@@ -70,7 +72,6 @@ def get_main_keyboard():
     }
 
 def get_back_keyboard():
-    """Tombol Kembali / Home"""
     return {
         "inline_keyboard": [
             [{"text": "🏠 Tampilan Utama (Kembali)", "callback_data": "btn_home"}]
@@ -78,15 +79,28 @@ def get_back_keyboard():
     }
 
 def send_menu(chat_id, text):
-    return telegram("sendMessage", {
+    res = telegram("sendMessage", {
         "chat_id": str(chat_id),
         "text": text,
         "parse_mode": "Markdown",
         "reply_markup": get_main_keyboard()
     })
+    if res and res.get("ok"):
+        state["dashboard_msg_id"] = res["result"]["message_id"]
+        state["dashboard_chat_id"] = chat_id
+        state["last_rendered_text"] = text
+    return res
 
 def update_menu(chat_id, message_id, text, is_home=False):
     markup = get_main_keyboard() if is_home else get_back_keyboard()
+    if is_home:
+        state["dashboard_msg_id"] = message_id
+        state["dashboard_chat_id"] = chat_id
+        state["last_rendered_text"] = text
+    else:
+        # Jika membuka submenu, hentikan sementara auto-update dashboard utama
+        state["dashboard_msg_id"] = None
+
     return telegram("editMessageText", {
         "chat_id": str(chat_id),
         "message_id": message_id,
@@ -97,8 +111,7 @@ def update_menu(chat_id, message_id, text, is_home=False):
 
 def answer_callback(callback_query_id, text=None):
     payload = {"callback_query_id": callback_query_id}
-    if text:
-        payload["text"] = text
+    if text: payload["text"] = text
     return telegram("answerCallbackQuery", payload)
 
 def broadcast(text, include_keyboard=True):
@@ -125,6 +138,30 @@ def get_indodax_price():
     except Exception as e:
         print("Error fetch price:", e)
         return None
+
+# ==========================================
+# AUTO-REFRESH LIVE DASHBOARD (OTOMATIS)
+# ==========================================
+def auto_refresh_dashboard_loop():
+    """Memperbarui pesan Dashboard Utama secara otomatis setiap 3 detik"""
+    while True:
+        try:
+            if state["dashboard_msg_id"] and state["dashboard_chat_id"]:
+                new_text = get_home_text()
+                # Update hanya jika isi teks/saldo mengalami perubahan
+                if new_text != state["last_rendered_text"]:
+                    res = telegram("editMessageText", {
+                        "chat_id": str(state["dashboard_chat_id"]),
+                        "message_id": state["dashboard_msg_id"],
+                        "text": new_text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": get_main_keyboard()
+                    })
+                    if res and res.get("ok"):
+                        state["last_rendered_text"] = new_text
+        except Exception as e:
+            print("Auto Refresh Error:", e)
+        time.sleep(3)
 
 # ==========================================
 # LAPORAN RUTIN PER 1 MENIT
@@ -184,7 +221,6 @@ def trading_loop():
                 if current_price:
                     now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-                    # 1. LAPORAN SEKETIKA SAAT BOT MEMBELI
                     if not state["in_position"]:
                         if analyze_signal(current_price) == "BUY":
                             amount_buy = state["idr_balance"] * (1 - FEE_RATE)
@@ -206,7 +242,6 @@ def trading_loop():
                                 include_keyboard=False
                             )
 
-                    # 2. LAPORAN SEKETIKA SAAT BOT MENJUAL
                     elif state["in_position"]:
                         pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
                         should_sell = False
@@ -253,16 +288,16 @@ def trading_loop():
 # ==========================================
 def get_home_text():
     status_str = "🟢 *AKTIF (RUNNING)*" if state["is_running"] else "🔴 *BERHENTI (STOPPED)*"
-    
-    # Hitung total saldo otomatis (IDR + Nilai BTC)
     price = get_indodax_price() or 0
     asset_val = state["asset_balance"] * price
     total_equity = state["idr_balance"] + asset_val
+    now = datetime.now().strftime("%H:%M:%S")
 
     return (
         f"🤖 *TRADE INDODAX #HUAT*\n\n"
         f"Status Bot: {status_str}\n"
-        f"💰 *Saldo Saat Ini:* Rp {total_equity:,.0f}\n\n"
+        f"💰 *Saldo Saat Ini:* Rp {total_equity:,.0f}\n"
+        f"⏱ _Live Updated: {now}_\n\n"
         f"Pilih menu di bawah ini untuk memantau atau mengendalikan bot:"
     )
 
@@ -350,4 +385,5 @@ def polling():
 if __name__ == "__main__":
     threading.Thread(target=trading_loop, daemon=True).start()
     threading.Thread(target=minutely_report_loop, daemon=True).start()
+    threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     polling()
