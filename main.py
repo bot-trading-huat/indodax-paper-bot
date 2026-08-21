@@ -3,19 +3,13 @@ import time
 import json
 import threading
 import urllib.request
-import urllib.parse
 from datetime import datetime
 
-# ==========================================
-# CONFIGURATION & STATE MANAGEMENT
-# ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-
 START_BALANCE = float(os.getenv("START_BALANCE", 100000))
 PAIR = os.getenv("PAIR", "btc_idr").lower()
 FEE_RATE = float(os.getenv("FEE_RATE", 0.002))
-
 MIN_TAKE_PROFIT = float(os.getenv("MIN_TAKE_PROFIT", 0.008))
 STOP_LOSS = float(os.getenv("STOP_LOSS", 0.015))
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", 2))
@@ -32,11 +26,10 @@ state = {
     "losing_trades": 0,
 }
 
-# ==========================================
-# TELEGRAM HELPER FUNCTIONS
-# ==========================================
 def telegram(method, params=None):
-    if not TOKEN: return None
+    if not TOKEN: 
+        print("ERROR: TELEGRAM_BOT_TOKEN Kosong!")
+        return None
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
     data = json.dumps(params or {}).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
@@ -48,7 +41,6 @@ def telegram(method, params=None):
         return None
 
 def get_main_keyboard():
-    """Menu Utama Inline Keyboard"""
     return {
         "inline_keyboard": [
             [{"text": "📊 Status Bot & Posisi", "callback_data": "btn_status"}],
@@ -59,7 +51,6 @@ def get_main_keyboard():
     }
 
 def get_back_keyboard():
-    """Tombol Kembali / Home agar antarmuka tidak lag"""
     return {
         "inline_keyboard": [
             [{"text": "🏠 Tampilan Utama (Kembali)", "callback_data": "btn_home"}]
@@ -98,9 +89,6 @@ def broadcast(text, include_keyboard=True):
             payload["reply_markup"] = get_main_keyboard()
         telegram("sendMessage", payload)
 
-# ==========================================
-# INDODAX REAL-TIME DATA
-# ==========================================
 def get_indodax_price():
     url = f"https://indodax.com/api/ticker/{PAIR}"
     try:
@@ -108,13 +96,12 @@ def get_indodax_price():
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return float(data["ticker"]["last"])
-    except Exception:
+    except Exception as e:
+        print("Indodax API Error:", e)
         return None
 
-# ==========================================
-# LAPORAN RUTIN PER 1 MENIT
-# ==========================================
 def minutely_report_loop():
+    print("⏰ Minutely Report Thread Running...")
     while True:
         time.sleep(60)
         try:
@@ -131,7 +118,7 @@ def minutely_report_loop():
                 f"────────────────────────\n"
                 f"🔄 *Aksi Menit Ini:* {state['trades_this_minute']} transaksi\n"
                 f"💵 *Saldo IDR:* Rp {state['idr_balance']:,.0f}\n"
-                f"🪙 *Nilai Aset ({PAIR.split('_')[0].upper()}):* Rp {asset_value:,.0f}\n"
+                f"🪙 *Nilai Aset:* Rp {asset_value:,.0f}\n"
                 f"💰 *Total Equity Saat Ini:* Rp {total_equity:,.0f}\n"
                 f"📈 *Total PnL Overall:* Rp {pnl_idr:,.0f} ({pnl_percent:+.2f}%)\n"
                 f"🎯 *Win / Loss:* {state['winning_trades']} Win / {state['losing_trades']} Loss\n"
@@ -142,9 +129,6 @@ def minutely_report_loop():
         except Exception as e:
             print("REPORT ERROR:", e)
 
-# ==========================================
-# TRADING ENGINE
-# ==========================================
 def analyze_signal(current_price):
     state["price_history"].append(current_price)
     if len(state["price_history"]) > 10:
@@ -158,13 +142,13 @@ def analyze_signal(current_price):
     return "WAIT"
 
 def trading_loop():
+    print("⚡ Trading Engine Running...")
     while True:
         try:
             current_price = get_indodax_price()
             if current_price:
                 now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-                # 1. LAPORAN SEKETIKA SAAT BOT MEMBELI
                 if not state["in_position"]:
                     if analyze_signal(current_price) == "BUY":
                         amount_buy = state["idr_balance"] * (1 - FEE_RATE)
@@ -186,7 +170,6 @@ def trading_loop():
                             include_keyboard=False
                         )
 
-                # 2. LAPORAN SEKETIKA SAAT BOT MENJUAL
                 elif state["in_position"]:
                     pnl_pct = (current_price - state["buy_price"]) / state["buy_price"]
                     should_sell = False
@@ -228,15 +211,12 @@ def trading_loop():
 
         time.sleep(INTERVAL_SECONDS)
 
-# ==========================================
-# TELEGRAM HANDLER
-# ==========================================
 def get_home_text():
     return "🤖 *STAFF AG TRADING DASHBOARD*\n\nPilih menu di bawah ini untuk memantau aktivitas bot:"
 
 def get_status_text():
     price = get_indodax_price() or 0
-    pos = f"Sedang Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Mencari Sinyal Beli (Cash Ready)"
+    pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Mencari Sinyal Beli"
     return f"📊 *STATUS BOT*\n\n• Pair: {PAIR.upper()}\n• Harga BTC: Rp {price:,.0f}\n• Posisi: {pos}"
 
 def get_balance_text():
@@ -283,12 +263,11 @@ def handle_update(update):
 
         if text.startswith("/start") or text.startswith("/menu"):
             send_menu(chat_id, get_home_text())
-        elif text.startswith("/id"):
-            telegram("sendMessage", {"chat_id": str(chat_id), "text": f"ID Anda: `{chat_id}`", "parse_mode": "Markdown"})
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
+    print("🤖 Telegram Bot Polling Started...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
