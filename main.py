@@ -12,14 +12,14 @@ sys.stdout.reconfigure(line_buffering=True)
 WIB = timezone(timedelta(hours=7))
 
 def get_wib_time():
-    # Menambahkan milidetik atau penghitung mikro untuk memastikan string selalu unik setiap detik
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "MASUKKAN_TOKEN_ANDA_DISINI")
-ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Masukkan Chat ID Telegram Anda di sini agar bot bisa langsung mengirim pesan otomatis saat start
+ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "MASUKKAN_CHAT_ID_ANDA_DISINI")
 
 INITIAL_CAPITAL_PER_COIN = float(os.getenv("START_BALANCE", 100000)) / 3.0
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
@@ -142,6 +142,10 @@ def fetch_price(pair):
     except Exception:
         return st["last_market_price"] or 1000.0
 
+def update_all_initial_prices():
+    for p in PAIRS:
+        fetch_price(p)
+
 # ==========================================
 # DASHBOARD TEXT BUILDER
 # ==========================================
@@ -194,7 +198,6 @@ def get_home_text():
         block_text = f"```\nMemantau pergerakan pasar...\n```"
 
     text_blocks.append(f"\n📋 *RIWAYAT TRANSAKSI:*\n{block_text}")
-    # Menggunakan detik yang selalu berubah agar Telegram mendeteksi teks sebagai pembaruan baru
     text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n💰 *TOTAL KESELURUHAN SALDO:* *Rp {total_combined_equity:,.2f}*\n📊 *Total Win/Loss:* 🟢 {total_wins} | 🔴 {total_losses}\n⏱ _Live Ticker: {now_wib} WIB_")
 
     return "\n".join(text_blocks)
@@ -203,17 +206,22 @@ def get_home_text():
 # AUTO-REFRESH & TRADING LOOPS
 # ==========================================
 def auto_refresh_dashboard_loop():
+    # Jika chat_id sudah diset di awal tapi msg_id masih kosong, kirim pesan otomatis
+    if global_state["dashboard_chat_id"] and not global_state["dashboard_msg_id"]:
+        update_all_initial_prices()
+        initial_text = get_home_text()
+        send_menu(global_state["dashboard_chat_id"], initial_text)
+
     while True:
         try:
             if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
                 new_text = get_home_text()
-                # Paksa kirim pembaruan setiap detik agar live ticker bergerak
                 res = update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], new_text)
                 if res and res.get("ok"):
                     global_state["last_rendered_text"] = new_text
         except Exception:
             pass
-        time.sleep(2)  # Jeda 2 detik pas agar terhindar dari banned rate-limit Telegram
+        time.sleep(2)
 
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
