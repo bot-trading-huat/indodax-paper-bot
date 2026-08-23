@@ -16,7 +16,7 @@ def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
-# CONFIGURATION
+# CONFIGURATION (TARGET PROFIT 20% & RISK 2%)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -151,7 +151,7 @@ def get_home_text(is_final=False):
     total_equity = state["idr_balance"] + asset_val
     now_wib = get_wib_time()
 
-    pos_info = "⚡ *Posisi:* Scalping Aktif" if state["in_position"] else "💵 *Posisi:* Standby (Mencari Celah)"
+    pos_info = "⚡ *Posisi:* Menunggu Target 20%" if state["in_position"] else "💵 *Posisi:* Standby (Mencari Momentum)"
 
     if state["minute_logs"]:
         logs_str = "\n".join(state["minute_logs"][-8:])
@@ -164,7 +164,7 @@ def get_home_text(is_final=False):
         profit_str = f"Rp {profit_loss_minute:+,.2f}"
 
         return (
-            f"🤖 *BOT TRADING PROTEKSI 2%*\n\n"
+            f"🤖 *BOT TARGET 20% & RISIKO 2%*\n\n"
             f"Status Bot: 🏁 *REKAP SESI SELESAI*\n"
             f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
@@ -176,7 +176,7 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🤖 *BOT TRADING PROTEKSI 2%*\n\n"
+        f"🤖 *BOT TARGET 20% & RISIKO 2%*\n\n"
         f"Status Bot: {status_str}\n"
         f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
         f"{pos_info}\n"
@@ -236,15 +236,14 @@ def minutely_reset_loop():
             print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# TRADING ENGINE DENGAN PROTEKSI COOLDOWN 2%
+# TRADING ENGINE: TARGET 20% & STOP LOSS 2%
 # ==========================================
 def trading_loop():
-    print("Engine Trading Proteksi 2% Aktif...")
+    print("Engine Target 20% & Stop Loss 2% Aktif...")
     highest_price = 0.0
 
     while True:
         try:
-            # Jika sedang cooldown, cek apakah waktu rehat 5 menit sudah selesai
             if state["is_cooldown"]:
                 now_dt = datetime.now(WIB)
                 cooldown_end_dt = datetime.strptime(state["cooldown_until"], "%H:%M:%S").replace(
@@ -257,7 +256,7 @@ def trading_loop():
                     if state["dashboard_chat_id"]:
                         telegram("sendMessage", {
                             "chat_id": str(state["dashboard_chat_id"]),
-                            "text": "🟢 *Cooldown Selesai!*\nBot kembali aktif bertransaksi secara otomatis.",
+                            "text": "🟢 *Cooldown Selesai!*\nBot kembali aktif memantau pasar.",
                             "parse_mode": "Markdown"
                         })
                 time.sleep(5)
@@ -270,25 +269,23 @@ def trading_loop():
                 if current_price > 0:
                     current_equity = state["idr_balance"] + (state["asset_balance"] * current_price)
                     
-                    # CEK ATURAN DRAWDOWN: Jika rugi mencapai 2% dari modal awal sesi, aktifkan Cooldown 5 menit
+                    # PROTEKSI 2%: Jika rugi menyentuh 2% dari saldo awal sesi
                     allowed_drop_limit = state["minute_start_equity"] * 0.98
                     if current_equity <= allowed_drop_limit:
                         state["is_running"] = False
                         state["is_cooldown"] = True
                         
-                        # Set waktu cooldown 5 menit ke depan
                         cooldown_target = datetime.now(WIB) + timedelta(minutes=5)
                         state["cooldown_until"] = cooldown_target.strftime("%H:%M:%S")
 
-                        # Jika sedang pegang aset saat terkena limit 2%, jual paksa untuk mengamankan sisa dana
                         if state["in_position"]:
                             gross = state["asset_balance"] * current_price
                             state["idr_balance"] = gross * (1 - FEE_RATE)
                             state["asset_balance"] = 0.0
                             state["in_position"] = False
 
-                        warning_msg = f"⚠️ *PROTEKSI 2% TERPICU!*\nSaldo turun menyentuh batas risiko. Bot dihentikan sementara dan akan istirahat hingga pukul *{state['cooldown_until']} WIB*."
-                        state["minute_logs"].append(f"[{now_wib}] 🛑 COOLDOWN 5 MENIT DIAKTIFKAN")
+                        warning_msg = f"⚠️ *BATAS RISIKO 2% TERCAPAI!*\nBot dihentikan sementara dan rehat hingga pukul *{state['cooldown_until']} WIB*."
+                        state["minute_logs"].append(f"[{now_wib}] 🛑 COOLDOWN 5 MENIT")
                         
                         if state["dashboard_chat_id"]:
                             telegram("sendMessage", {
@@ -311,19 +308,17 @@ def trading_loop():
                         log_entry = f"[{now_wib}] BUY  @ Rp {current_price:,.0f}"
                         state["minute_logs"].append(log_entry)
 
-                    # 2. KONDISI JUAL (TAKE PROFIT KILAT)
+                    # 2. KONDISI JUAL (TARGET 20% ATAU STOP LOSS DARURAT -2%)
                     elif state["in_position"]:
                         if current_price > highest_price:
                             highest_price = current_price
 
                         price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
-                        drop_from_peak = (highest_price - current_price) / highest_price if highest_price > 0 else 0
+                        
+                        is_target_hit = price_change_pct >= 0.20
+                        is_stop_loss = price_change_pct <= -0.02
 
-                        is_target_hit = price_change_pct >= 0.0035
-                        is_trailing = (highest_price >= state["buy_price"] * 1.004) and (drop_from_peak >= 0.001)
-                        is_stop_loss = price_change_pct <= -0.005
-
-                        if is_target_hit or is_trailing or is_stop_loss:
+                        if is_target_hit or is_stop_loss:
                             gross = state["asset_balance"] * current_price
                             net_idr = gross * (1 - FEE_RATE)
                             
@@ -338,11 +333,11 @@ def trading_loop():
                             if pnl_idr > 0:
                                 state["winning_trades"] += 1
                                 state["minute_wins"] += 1
-                                tag = "SELL PROFIT"
+                                tag = "SELL PROFIT (20%)"
                             else:
                                 state["losing_trades"] += 1
                                 state["minute_losses"] += 1
-                                tag = "SELL LOSS"
+                                tag = "SELL LOSS (-2%)"
 
                             log_entry = f"[{now_wib}] {tag} @ Rp {current_price:,.0f} ({pnl_idr:+,.0f})"
                             state["minute_logs"].append(log_entry)
@@ -357,9 +352,9 @@ def trading_loop():
 # ==========================================
 def get_status_text():
     price = get_indodax_price() or 0
-    status = "Coolddown 5 Menit" if state["is_cooldown"] else ("Berjalan" if state["is_running"] else "Berhenti")
+    status = "Cooldown 5 Menit" if state["is_cooldown"] else ("Berjalan" if state["is_running"] else "Berhenti")
     pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Standby"
-    return f"📊 *STATUS BOT*\n\n• Kondisi: {status}\n• Pair: {PAIR.upper()}\n• Harga: Rp {price:,.0f}\n• Posisi: {pos}"
+    return f"📊 *STATUS BOT*\n\n• Kondisi: {status}\n• Target: Profit 20%\n• Risk Limit: Loss 2%\n• Harga: Rp {price:,.0f}\n• Posisi: {pos}"
 
 def get_balance_text():
     price = get_indodax_price() or 0
@@ -385,7 +380,7 @@ def handle_update(update):
         if data == "btn_start":
             state["is_running"] = True
             state["is_cooldown"] = False
-            answer_callback(cb_id, "▶️ Bot dijalankan manual.")
+            answer_callback(cb_id, "▶️ Bot dijalankan.")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
         elif data == "btn_stop":
             state["is_running"] = False
