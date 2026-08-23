@@ -24,8 +24,8 @@ ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 INITIAL_CAPITAL_PER_COIN = float(os.getenv("START_BALANCE", 100000)) / 3.0
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 
-# Daftar 3 koin yang dipantau
-PAIRS = ["sol_usdt", "eth_usdt", "doge_usdt"]
+# Daftar pair sesuai format endpoint API Indodax (tanpa underscore)
+PAIRS = ["solusdt", "ethusdt", "dogeusdt"]
 
 coins_state = {}
 for p in PAIRS:
@@ -182,20 +182,21 @@ def get_home_text():
 
         chart_vis = "".join(st["chart_history"])
         pos_str = "⚡ Target 0.6%" if st["in_position"] else "💵 Standby"
+        pair_display = p.upper().replace("USDT", "/USDT")
 
         text_blocks.append(
-            f"🔹 *{p.upper()}* | {status}\n"
+            f"🔹 *{pair_display}* | {status}\n"
             f"   • Harga: {price:,.2f} {st['price_trend']}\n"
             f"   • Grafik: `{chart_vis}`\n"
             f"   • Saldo: Rp {equity:,.2f} ({pos_str})\n"
             f"   • Win: {st['winning_trades']} | Loss: {st['losing_trades']}"
         )
 
-    # Mengumpulkan riwayat log dari ketiga koin untuk dimasukkan ke kotak hitam
     all_logs = []
     for p in PAIRS:
+        pair_display = p.upper().replace("USDT", "/USDT")
         for lg in coins_state[p]["logs"]:
-            all_logs.append(f"[{p.upper()}] {lg}")
+            all_logs.append(f"[{pair_display}] {lg}")
             
     if all_logs:
         logs_str = "\n".join(all_logs[-4:])
@@ -233,7 +234,8 @@ def auto_refresh_dashboard_loop():
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
     highest_price = 0.0
-    print(f"Engine Trading untuk {pair.upper()} aktif...")
+    pair_display = pair.upper().replace("USDT", "/USDT")
+    print(f"Engine Trading untuk {pair_display} aktif...")
 
     while True:
         try:
