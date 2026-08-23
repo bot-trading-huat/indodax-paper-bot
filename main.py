@@ -18,13 +18,16 @@ def get_wib_time():
 # CONFIGURATION
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "MASUKKAN_TOKEN_ANDA_DISINI")
-# Masukkan Chat ID Telegram Anda di sini agar bot bisa langsung mengirim pesan otomatis saat start
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "MASUKKAN_CHAT_ID_ANDA_DISINI")
 
 INITIAL_CAPITAL_PER_COIN = float(os.getenv("START_BALANCE", 100000)) / 3.0
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 
-PAIRS = ["solusdt", "ethusdt", "dogeusdt"]
+# Format pair di Indodax menggunakan idr (misal: solidr, ethidr, dogeidr) 
+# Jika menggunakan USDT, pastikan endpoint sesuai. Mari kita gunakan pair IDR (solidr, ethidr, dogeidr) 
+# karena lebih stabil di public API Indodax, atau tetap usdt jika memang marketnya usdt.
+# Kita gunakan format standar Indodax: 'solidr', 'ethidr', 'dogeidr' agar harga akurat dalam Rupiah.
+PAIRS = ["solidr", "ethidr", "dogeidr"]
 
 coins_state = {}
 for p in PAIRS:
@@ -110,17 +113,22 @@ def answer_callback(callback_query_id, text=None):
     return telegram("answerCallbackQuery", payload)
 
 # ==========================================
-# ROBUST PRICE FETCHER
+# ROBUST PRICE FETCHER (INDODAX API)
 # ==========================================
 def fetch_price(pair):
     url = f"https://indodax.com/api/ticker/{pair}"
     st = coins_state[pair]
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        })
+        with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             new_price = float(data["ticker"]["last"])
             
+            if new_price <= 0:
+                return st["last_market_price"]
+
             if st["last_market_price"] > 0 and new_price != st["last_market_price"]:
                 diff = new_price - st["last_market_price"]
                 if diff > 0:
@@ -139,8 +147,9 @@ def fetch_price(pair):
             
             st["last_market_price"] = new_price
             return new_price
-    except Exception:
-        return st["last_market_price"] or 1000.0
+    except Exception as e:
+        # Jangan gunakan fallback angka kecil/palsu agar bot tidak salah eksekusi beli
+        return st["last_market_price"]
 
 def update_all_initial_prices():
     for p in PAIRS:
@@ -155,7 +164,7 @@ def get_home_text():
     total_losses = 0
     now_wib = get_wib_time()
 
-    text_blocks = [f"🤖 *BOT MULTI-SCALPING (3 KOIN)*\n"]
+    text_blocks = [f"🤖 *BOT MULTI-SCALPING INDODAX*\n"]
 
     for p in PAIRS:
         st = coins_state[p]
@@ -175,11 +184,11 @@ def get_home_text():
 
         chart_vis = "".join(st["chart_history"])
         pos_str = "⚡ Target 0.6%" if st["in_position"] else "💵 Standby"
-        pair_display = p.upper().replace("USDT", "/USDT")
+        pair_display = p.upper().replace("IDR", "/IDR")
 
         text_blocks.append(
             f"🔹 *{pair_display}* | {status}\n"
-            f"   • Harga: {price:,.2f}\n"
+            f"   • Harga: Rp {price:,.2f}\n"
             f"   • Grafik: `{chart_vis}`\n"
             f"   • Saldo: Rp {equity:,.2f} ({pos_str})\n"
             f"   • Win: {st['winning_trades']} | Loss: {st['losing_trades']}"
@@ -187,7 +196,7 @@ def get_home_text():
 
     all_logs = []
     for p in PAIRS:
-        pair_display = p.upper().replace("USDT", "/USDT")
+        pair_display = p.upper().replace("IDR", "/IDR")
         for lg in coins_state[p]["logs"]:
             all_logs.append(f"[{pair_display}] {lg}")
             
@@ -206,7 +215,6 @@ def get_home_text():
 # AUTO-REFRESH & TRADING LOOPS
 # ==========================================
 def auto_refresh_dashboard_loop():
-    # Jika chat_id sudah diset di awal tapi msg_id masih kosong, kirim pesan otomatis
     if global_state["dashboard_chat_id"] and not global_state["dashboard_msg_id"]:
         update_all_initial_prices()
         initial_text = get_home_text()
@@ -226,12 +234,20 @@ def auto_refresh_dashboard_loop():
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
     highest_price = 0.0
-    pair_display = pair.upper().replace("USDT", "/USDT")
+    pair_display = pair.upper().replace("IDR", "/IDR")
     print(f"Engine Trading untuk {pair_display} aktif...")
+
+    # Tunggu sebentar sampai harga pertama berhasil ditarik dengan benar
+    while st["last_market_price"] <= 0:
+        fetch_price(pair)
+        time.sleep(1)
 
     while True:
         try:
             current_price = fetch_price(pair)
+            if current_price <= 0:
+                time.sleep(2)
+                continue
 
             if st["is_cooldown"]:
                 now_dt = datetime.now(WIB)
@@ -248,66 +264,65 @@ def single_coin_trading_worker(pair):
             if st["is_running"]:
                 now_wib = get_wib_time()
 
-                if current_price > 0:
-                    current_equity = st["idr_balance"] + (st["asset_balance"] * current_price)
-                    allowed_drop_limit = st["minute_start_equity"] * 0.98
+                current_equity = st["idr_balance"] + (st["asset_balance"] * current_price)
+                allowed_drop_limit = st["minute_start_equity"] * 0.98
+                
+                if current_equity <= allowed_drop_limit:
+                    st["is_running"] = False
+                    st["is_cooldown"] = True
+                    cooldown_target = datetime.now(WIB) + timedelta(minutes=5)
+                    st["cooldown_until"] = cooldown_target.strftime("%H:%M:%S")
+
+                    if st["in_position"]:
+                        gross = st["asset_balance"] * current_price
+                        st["idr_balance"] = gross * (1 - FEE_RATE)
+                        st["asset_balance"] = 0.0
+                        st["in_position"] = False
+                    st["logs"].append(f"[{now_wib}] COOLDOWN 5M")
+                    continue
+
+                # 1. KONDISI BELI (ENTRY) - Pastikan modal mencukupi dan harga valid (> 1000)
+                if not st["in_position"] and st["idr_balance"] > 1000:
+                    st["buy_price"] = current_price
+                    highest_price = current_price
                     
-                    if current_equity <= allowed_drop_limit:
-                        st["is_running"] = False
-                        st["is_cooldown"] = True
-                        cooldown_target = datetime.now(WIB) + timedelta(minutes=5)
-                        st["cooldown_until"] = cooldown_target.strftime("%H:%M:%S")
+                    net_idr = st["idr_balance"] * (1 - FEE_RATE)
+                    st["asset_balance"] = net_idr / current_price
+                    st["idr_balance"] = 0.0
+                    st["in_position"] = True
 
-                        if st["in_position"]:
-                            gross = st["asset_balance"] * current_price
-                            st["idr_balance"] = gross * (1 - FEE_RATE)
-                            st["asset_balance"] = 0.0
-                            st["in_position"] = False
-                        st["logs"].append(f"[{now_wib}] COOLDOWN 5M")
-                        continue
+                    st["logs"].append(f"[{now_wib}] BUY @ {current_price:,.0f}")
+                    if len(st["logs"]) > 6: st["logs"].pop(0)
 
-                    # 1. KONDISI BELI (ENTRY)
-                    if not st["in_position"] and st["idr_balance"] > 1000:
-                        st["buy_price"] = current_price
+                # 2. KONDISI JUAL (TARGET 0.6% / STOP LOSS -2%)
+                elif st["in_position"]:
+                    if current_price > highest_price:
                         highest_price = current_price
+
+                    price_change_pct = (current_price - st["buy_price"]) / st["buy_price"]
+                    is_target_hit = price_change_pct >= 0.006
+                    is_stop_loss = price_change_pct <= -0.02
+
+                    if is_target_hit or is_stop_loss:
+                        gross = st["asset_balance"] * current_price
+                        net_idr = gross * (1 - FEE_RATE)
+                        pnl_idr = net_idr - (st["asset_balance"] * st["buy_price"])
                         
-                        net_idr = st["idr_balance"] * (1 - FEE_RATE)
-                        st["asset_balance"] = net_idr / current_price
-                        st["idr_balance"] = 0.0
-                        st["in_position"] = True
+                        st["idr_balance"] = net_idr
+                        st["asset_balance"] = 0.0
+                        st["in_position"] = False
+                        st["total_trades"] += 1
+                        highest_price = 0.0
 
-                        st["logs"].append(f"[{now_wib}] BUY @ {current_price:,.2f}")
+                        if price_change_pct > 0:
+                            st["winning_trades"] += 1
+                            tag = "WIN (+0.6%)"
+                        else:
+                            st["losing_trades"] += 1
+                            tag = "LOSS (-2%)"
+
+                        st["logs"].append(f"[{now_wib}] {tag} ({pnl_idr:+,.0f})")
                         if len(st["logs"]) > 6: st["logs"].pop(0)
-
-                    # 2. KONDISI JUAL (TARGET 0.6% / STOP LOSS -2%)
-                    elif st["in_position"]:
-                        if current_price > highest_price:
-                            highest_price = current_price
-
-                        price_change_pct = (current_price - st["buy_price"]) / st["buy_price"]
-                        is_target_hit = price_change_pct >= 0.006
-                        is_stop_loss = price_change_pct <= -0.02
-
-                        if is_target_hit or is_stop_loss:
-                            gross = st["asset_balance"] * current_price
-                            net_idr = gross * (1 - FEE_RATE)
-                            pnl_idr = net_idr - (st["asset_balance"] * st["buy_price"])
-                            
-                            st["idr_balance"] = net_idr
-                            st["asset_balance"] = 0.0
-                            st["in_position"] = False
-                            st["total_trades"] += 1
-                            highest_price = 0.0
-
-                            if price_change_pct > 0:
-                                st["winning_trades"] += 1
-                                tag = "WIN (+0.6%)"
-                            else:
-                                st["losing_trades"] += 1
-                                tag = "LOSS (-2%)"
-
-                            st["logs"].append(f"[{now_wib}] {tag} ({pnl_idr:+,.0f})")
-                            if len(st["logs"]) > 6: st["logs"].pop(0)
 
         except Exception as e:
             print(f"ENGINE ERROR ({pair}):", e)
