@@ -13,7 +13,6 @@ sys.stdout.reconfigure(line_buffering=True)
 WIB = timezone(timedelta(hours=7))
 
 def get_wib_time():
-    """Mengembalikan string jam dalam format WIB (HH:MM:SS)"""
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
@@ -24,7 +23,7 @@ ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 START_BALANCE = float(os.getenv("START_BALANCE", 100000))
 PAIR = os.getenv("PAIR", "btc_idr").lower()
-FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) # Fee Indodax 0.21% (Beli/Jual)
+FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) # Fee Indodax 0.21%
 
 state = {
     "is_running": True,
@@ -144,20 +143,20 @@ def get_home_text(is_final=False):
     total_equity = state["idr_balance"] + asset_val
     now_wib = get_wib_time()
 
-    pos_info = "⚡ *Posisi:* Scalping (Holding BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Persiapan Beli)"
+    pos_info = "⚡ *Posisi:* Scalping Cepat (Holding BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Mencari Celah Cepat)"
 
     if state["minute_logs"]:
         logs_str = "\n".join(state["minute_logs"][-8:])
         block_text = f"```\n{logs_str}\n```"
     else:
-        block_text = "```\nMenunggu sinyal transaksi aktif...\n```"
+        block_text = "```\nMenunggu sinyal scalping kilat...\n```"
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
         profit_str = f"Rp {profit_loss_minute:+,.2f}"
 
         return (
-            f"🤖 *BOT TRADING INDODAX (REAL MARKET)*\n\n"
+            f"🤖 *BOT TRADING INDODAX (FAST SCALPER)*\n\n"
             f"Status Bot: 🏁 *REKAP SESI (SELESAI)*\n"
             f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
@@ -170,7 +169,7 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🤖 *BOT TRADING INDODAX (REAL MARKET)*\n\n"
+        f"🤖 *BOT TRADING INDODAX (FAST SCALPER)*\n\n"
         f"Status Bot: {status_str}\n"
         f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
         f"{pos_info}\n"
@@ -233,10 +232,10 @@ def minutely_reset_loop():
             print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# ENGINE TRADING: REAL MARKET & SAFETY
+# ENGINE TRADING: ULTRA-FAST SCALPER
 # ==========================================
 def trading_loop():
-    print("Engine Trading Real Market Aktif...")
+    print("Engine Fast Scalper Aktif...")
     highest_price = 0.0
 
     while True:
@@ -246,12 +245,12 @@ def trading_loop():
                 now_wib = get_wib_time()
 
                 if current_price > 0:
-                    # 1. KONDISI BELI (ENTRY): Langsung eksekusi buy jika standby & saldo cukup
+                    # 1. KONDISI BELI (ENTRY) CEPAT
                     if not state["in_position"] and state["idr_balance"] > 1000:
                         state["buy_price"] = current_price
                         highest_price = current_price
                         
-                        net_idr = state["idr_balance"] * (1 - FEE_RATE)  # Potong Fee Beli 0.21%
+                        net_idr = state["idr_balance"] * (1 - FEE_RATE)
                         state["asset_balance"] = net_idr / current_price
                         state["idr_balance"] = 0.0
                         state["in_position"] = True
@@ -259,7 +258,7 @@ def trading_loop():
                         log_entry = f"[{now_wib}] BUY  @ Rp {current_price:,.0f}"
                         state["minute_logs"].append(log_entry)
 
-                    # 2. KONDISI JUAL (TAKE PROFIT / TRAILING / STOP LOSS)
+                    # 2. KONDISI JUAL KILAT (TARGET KECIL AGAR SERING PROFIT)
                     elif state["in_position"]:
                         if current_price > highest_price:
                             highest_price = current_price
@@ -267,13 +266,16 @@ def trading_loop():
                         price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
                         drop_from_peak = (highest_price - current_price) / highest_price if highest_price > 0 else 0
 
-                        is_target_hit = price_change_pct >= 0.012
-                        is_trailing = (highest_price >= state["buy_price"] * 1.015) and (drop_from_peak >= 0.002)
-                        is_stop_loss = price_change_pct <= -0.015
+                        # TARGET TAKE PROFIT DITURUNKAN KE +0.35% (Supaya cepat kena & menutup fee)
+                        is_target_hit = price_change_pct >= 0.0035
+                        # Trailing cepat jika sempat naik tipis lalu turun sedikit
+                        is_trailing = (highest_price >= state["buy_price"] * 1.004) and (drop_from_peak >= 0.001)
+                        # Stop loss ketat agar modal aman
+                        is_stop_loss = price_change_pct <= -0.005
 
                         if is_target_hit or is_trailing or is_stop_loss:
                             gross = state["asset_balance"] * current_price
-                            net_idr = gross * (1 - FEE_RATE)  # Potong Fee Jual 0.21%
+                            net_idr = gross * (1 - FEE_RATE)
                             
                             pnl_idr = net_idr - (state["asset_balance"] * state["buy_price"])
 
@@ -298,7 +300,7 @@ def trading_loop():
         except Exception as e:
             print("ENGINE ERROR:", e)
 
-        time.sleep(2) # Cek harga setiap 2 detik
+        time.sleep(1.5) # Cek lebih cepat setiap 1.5 detik
 
 # ==========================================
 # TELEGRAM HANDLER
@@ -306,8 +308,8 @@ def trading_loop():
 def get_status_text():
     price = get_indodax_price() or 0
     status_str = "🟢 Berjalan (Active)" if state["is_running"] else "🔴 Berhenti (Stopped)"
-    pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Standby (Persiapan Beli)"
-    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: {PAIR.upper()}\n• Harga BTC saat ini: Rp {price:,.0f}\n• Posisi: {pos}"
+    pos = f"Memegang Aset ({state['asset_balance']:.6f} BTC)" if state["in_position"] else "Standby (Mencari Celah)"
+    return f"📊 *STATUS BOT*\n\n• Mode: Fast Scalper\n• Pair: {PAIR.upper()}\n• Harga BTC: Rp {price:,.0f}\n• Posisi: {pos}"
 
 def get_balance_text():
     price = get_indodax_price() or 0
