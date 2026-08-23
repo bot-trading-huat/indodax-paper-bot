@@ -135,10 +135,10 @@ def get_indodax_price():
             if state["last_market_price"] > 0:
                 diff = new_price - state["last_market_price"]
                 if diff > 0:
-                    state["price_trend"] = "🟩 NAIK"
+                    state["price_trend"] = "🔺 NAIK"
                     char = "▇" if diff > 50000 else ("▄" if diff > 10000 else "▂")
                 elif diff < 0:
-                    state["price_trend"] = "🟥 TURUN"
+                    state["price_trend"] = "🔻 TURUN"
                     char = "▂"
                 else:
                     state["price_trend"] = "⏺ STABIL"
