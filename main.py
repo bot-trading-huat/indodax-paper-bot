@@ -27,7 +27,6 @@ FEE_RATE = float(os.getenv("FEE_RATE", 0.0021))
 # Daftar 3 koin yang dipantau
 PAIRS = ["sol_usdt", "eth_usdt", "doge_usdt"]
 
-# State global untuk masing-masing koin
 coins_state = {}
 for p in PAIRS:
     coins_state[p] = {
@@ -44,10 +43,10 @@ for p in PAIRS:
         "minute_start_equity": INITIAL_CAPITAL_PER_COIN,
         "minute_wins": 0,
         "minute_losses": 0,
-        "minute_logs": [],
+        "logs": [],
         "last_market_price": 0.0,
         "price_trend": "⏺",
-        "chart_history": ["—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]
+        "chart_history": ["—", "—", "—", "—", "—", "—", "—", "—"]
     }
 
 global_state = {
@@ -72,7 +71,6 @@ def telegram(method, params=None):
         return None
 
 def get_main_keyboard():
-    # Cek apakah secara umum bot berjalan
     all_running = all(coins_state[p]["is_running"] for p in PAIRS)
     play_stop_text = "⏹ Hentikan Semua Bot" if all_running else "▶️ Jalankan Semua Bot"
     play_stop_cb = "btn_stop_all" if all_running else "btn_start_all"
@@ -140,7 +138,7 @@ def fetch_price(pair):
                     char = "—"
                 
                 st["chart_history"].append(char)
-                if len(st["chart_history"]) > 8:
+                if len(st["chart_history"]) > 6:
                     st["chart_history"].pop(0)
             
             st["last_market_price"] = new_price
@@ -160,6 +158,8 @@ def get_home_text():
     update_all_prices()
     
     total_combined_equity = 0.0
+    total_wins = 0
+    total_losses = 0
     now_wib = get_wib_time()
 
     text_blocks = [f"🤖 *BOT MULTI-SCALPING (3 KOIN)*\n"]
@@ -170,9 +170,11 @@ def get_home_text():
         asset_val = st["asset_balance"] * price
         equity = st["idr_balance"] + asset_val
         total_combined_equity += equity
+        total_wins += st["winning_trades"]
+        total_losses += st["losing_trades"]
 
         if st["is_cooldown"]:
-            status = f"🟡 Cooldown ({st['cooldown_until']})"
+            status = f"🟡 Cooldown"
         elif st["is_running"]:
             status = "🟢 Jalan"
         else:
@@ -186,9 +188,23 @@ def get_home_text():
             f"   • Harga: {price:,.2f} {st['price_trend']}\n"
             f"   • Grafik: `{chart_vis}`\n"
             f"   • Saldo: Rp {equity:,.2f} ({pos_str})\n"
+            f"   • Win: {st['winning_trades']} | Loss: {st['losing_trades']}"
         )
 
-    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n💰 *TOTAL KESELURUHAN SALDO:* *Rp {total_combined_equity:,.2f}*\n⏱ _Live Ticker: {now_wib} WIB_")
+    # Mengumpulkan riwayat log dari ketiga koin untuk dimasukkan ke kotak hitam
+    all_logs = []
+    for p in PAIRS:
+        for lg in coins_state[p]["logs"]:
+            all_logs.append(f"[{p.upper()}] {lg}")
+            
+    if all_logs:
+        logs_str = "\n".join(all_logs[-4:])
+        block_text = f"```\n{logs_str}\n```"
+    else:
+        block_text = f"```\nMemantau pergerakan pasar...\n```"
+
+    text_blocks.append(f"\n📋 *RIWAYAT TRANSAKSI:*\n{block_text}")
+    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n💰 *TOTAL KESELURUHAN SALDO:* *Rp {total_combined_equity:,.2f}*\n📊 *Total Win/Loss:* 🟢 {total_wins} | 🔴 {total_losses}\n⏱ _Live Ticker: {now_wib} WIB_")
 
     return "\n".join(text_blocks)
 
@@ -235,6 +251,8 @@ def single_coin_trading_worker(pair):
 
             if st["is_running"]:
                 current_price = st["last_market_price"]
+                now_wib = get_wib_time()
+
                 if current_price > 0:
                     current_equity = st["idr_balance"] + (st["asset_balance"] * current_price)
                     allowed_drop_limit = st["minute_start_equity"] * 0.98
@@ -250,6 +268,7 @@ def single_coin_trading_worker(pair):
                             st["idr_balance"] = gross * (1 - FEE_RATE)
                             st["asset_balance"] = 0.0
                             st["in_position"] = False
+                        st["logs"].append(f"[{now_wib}] COOLDOWN 5M")
                         continue
 
                     # 1. KONDISI BELI (ENTRY)
@@ -261,6 +280,9 @@ def single_coin_trading_worker(pair):
                         st["asset_balance"] = net_idr / current_price
                         st["idr_balance"] = 0.0
                         st["in_position"] = True
+
+                        st["logs"].append(f"[{now_wib}] BUY @ {current_price:,.2f}")
+                        if len(st["logs"]) > 6: st["logs"].pop(0)
 
                     # 2. KONDISI JUAL (TARGET 0.6% / STOP LOSS -2%)
                     elif st["in_position"]:
@@ -274,6 +296,7 @@ def single_coin_trading_worker(pair):
                         if is_target_hit or is_stop_loss:
                             gross = st["asset_balance"] * current_price
                             net_idr = gross * (1 - FEE_RATE)
+                            pnl_idr = net_idr - (st["asset_balance"] * st["buy_price"])
                             
                             st["idr_balance"] = net_idr
                             st["asset_balance"] = 0.0
@@ -283,8 +306,13 @@ def single_coin_trading_worker(pair):
 
                             if price_change_pct > 0:
                                 st["winning_trades"] += 1
+                                tag = "WIN (+0.6%)"
                             else:
                                 st["losing_trades"] += 1
+                                tag = "LOSS (-2%)"
+
+                            st["logs"].append(f"[{now_wib}] {tag} ({pnl_idr:+,.0f})")
+                            if len(st["logs"]) > 6: st["logs"].pop(0)
 
         except Exception as e:
             print(f"ENGINE ERROR ({pair}):", e)
@@ -346,10 +374,8 @@ def polling():
             time.sleep(5)
 
 if __name__ == "__main__":
-    # Jalankan thread trading terpisah untuk masing-masing dari 3 koin
     for p in PAIRS:
         threading.Thread(target=single_coin_trading_worker, args=(p,), daemon=True).start()
 
-    # Jalankan thread auto refresh dashboard & polling telegram
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     polling()
