@@ -15,16 +15,14 @@ def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
-# CONFIGURATION (3 KOIN SEKALIGUS)
+# CONFIGURATION
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "MASUKKAN_TOKEN_ANDA_DISINI")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Modal awal dibagi rata ke 3 koin (Total Rp 100.000)
 INITIAL_CAPITAL_PER_COIN = float(os.getenv("START_BALANCE", 100000)) / 3.0
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 
-# Daftar pair sesuai format endpoint API Indodax (tanpa underscore)
 PAIRS = ["solusdt", "ethusdt", "dogeusdt"]
 
 coins_state = {}
@@ -41,8 +39,6 @@ for p in PAIRS:
         "winning_trades": 0,
         "losing_trades": 0,
         "minute_start_equity": INITIAL_CAPITAL_PER_COIN,
-        "minute_wins": 0,
-        "minute_losses": 0,
         "logs": [],
         "last_market_price": 0.0,
         "price_trend": "⏺",
@@ -56,18 +52,17 @@ global_state = {
 }
 
 # ==========================================
-# TELEGRAM HELPER FUNCTIONS
+# SAFE TELEGRAM & API FUNCTIONS
 # ==========================================
 def telegram(method, params=None):
     if not TOKEN: return None
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
-    data = json.dumps(params or {}).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.dumps(params or {}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print("Telegram API Error:", e)
+    except Exception:
         return None
 
 def get_main_keyboard():
@@ -114,18 +109,18 @@ def answer_callback(callback_query_id, text=None):
     return telegram("answerCallbackQuery", payload)
 
 # ==========================================
-# INDODAX REAL-TIME DATA & MINI CHART
+# ROBUST PRICE FETCHER
 # ==========================================
 def fetch_price(pair):
     url = f"https://indodax.com/api/ticker/{pair}"
     st = coins_state[pair]
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             new_price = float(data["ticker"]["last"])
             
-            if st["last_market_price"] > 0:
+            if st["last_market_price"] > 0 and new_price != st["last_market_price"]:
                 diff = new_price - st["last_market_price"]
                 if diff > 0:
                     st["price_trend"] = "🔺"
@@ -143,20 +138,13 @@ def fetch_price(pair):
             
             st["last_market_price"] = new_price
             return new_price
-    except Exception as e:
-        print(f"Error fetch price {pair}:", e)
+    except Exception:
         return st["last_market_price"] or 1000.0
-
-def update_all_prices():
-    for p in PAIRS:
-        fetch_price(p)
 
 # ==========================================
 # DASHBOARD TEXT BUILDER
 # ==========================================
 def get_home_text():
-    update_all_prices()
-    
     total_combined_equity = 0.0
     total_wins = 0
     total_losses = 0
@@ -176,7 +164,7 @@ def get_home_text():
         if st["is_cooldown"]:
             status = f"🟡 Cooldown"
         elif st["is_running"]:
-            status = "🟢 Jalan"
+            status = f"🟢 Jalan ({st['price_trend']})"
         else:
             status = "🔴 Berhenti"
 
@@ -186,7 +174,7 @@ def get_home_text():
 
         text_blocks.append(
             f"🔹 *{pair_display}* | {status}\n"
-            f"   • Harga: {price:,.2f} {st['price_trend']}\n"
+            f"   • Harga: {price:,.2f}\n"
             f"   • Grafik: `{chart_vis}`\n"
             f"   • Saldo: Rp {equity:,.2f} ({pos_str})\n"
             f"   • Win: {st['winning_trades']} | Loss: {st['losing_trades']}"
@@ -210,7 +198,7 @@ def get_home_text():
     return "\n".join(text_blocks)
 
 # ==========================================
-# AUTO-REFRESH & TRADING LOOPS
+# AUTO-REFRESH & TRADING LOOPS (ISOLATED)
 # ==========================================
 def auto_refresh_dashboard_loop():
     while True:
@@ -218,18 +206,13 @@ def auto_refresh_dashboard_loop():
             if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
                 new_text = get_home_text()
                 if new_text != global_state["last_rendered_text"]:
-                    res = telegram("editMessageText", {
-                        "chat_id": str(global_state["dashboard_chat_id"]),
-                        "message_id": global_state["dashboard_msg_id"],
-                        "text": new_text,
-                        "parse_mode": "Markdown",
-                        "reply_markup": get_main_keyboard()
-                    })
+                    res = update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], new_text)
                     if res and res.get("ok"):
                         global_state["last_rendered_text"] = new_text
-        except Exception as e:
-            print("Auto Refresh Error:", e)
-        time.sleep(2)
+        except Exception:
+            pass
+        # Refresh tampilan setiap 1 detik agar detik live ticker berjalan mulus
+        time.sleep(1)
 
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
@@ -239,6 +222,9 @@ def single_coin_trading_worker(pair):
 
     while True:
         try:
+            # Ambil harga terbaru secara independen per koin
+            current_price = fetch_price(pair)
+
             if st["is_cooldown"]:
                 now_dt = datetime.now(WIB)
                 cooldown_end_dt = datetime.strptime(st["cooldown_until"], "%H:%M:%S").replace(
@@ -247,12 +233,11 @@ def single_coin_trading_worker(pair):
                 if now_dt >= cooldown_end_dt:
                     st["is_cooldown"] = False
                     st["is_running"] = True
-                    st["minute_start_equity"] = st["idr_balance"] + (st["asset_balance"] * st["last_market_price"])
-                time.sleep(5)
+                    st["minute_start_equity"] = st["idr_balance"] + (st["asset_balance"] * current_price)
+                time.sleep(3)
                 continue
 
             if st["is_running"]:
-                current_price = st["last_market_price"]
                 now_wib = get_wib_time()
 
                 if current_price > 0:
