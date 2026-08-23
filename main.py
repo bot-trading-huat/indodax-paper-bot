@@ -16,7 +16,7 @@ def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
-# CONFIGURATION (SCALPING & MINI TEXT CHART)
+# CONFIGURATION (SCALPING & ARROW TREND)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -45,7 +45,7 @@ state = {
     "last_rendered_text": "",
     "last_market_price": 0.0,
     "price_trend": "⏺",
-    "chart_history": ["—", "—", "—", "—", "—", "—", "—", "—", "—", "—"]
+    "chart_history": ["➖", "➖", "➖", "➖", "➖", "➖", "➖", "➖", "➖", "➖"]
 }
 
 # ==========================================
@@ -122,7 +122,7 @@ def answer_callback(callback_query_id, text=None):
     return telegram("answerCallbackQuery", payload)
 
 # ==========================================
-# INDODAX REAL-TIME DATA & MINI CHART
+# INDODAX REAL-TIME DATA & ARROW CHART
 # ==========================================
 def get_indodax_price():
     url = f"https://indodax.com/api/ticker/{PAIR}"
@@ -135,18 +135,18 @@ def get_indodax_price():
             if state["last_market_price"] > 0:
                 diff = new_price - state["last_market_price"]
                 if diff > 0:
-                    state["price_trend"] = "🟩 NAIK"
-                    char = "▇" if diff > 50000 else ("▄" if diff > 10000 else "▂")
+                    state["price_trend"] = "🔺 NAIK"
+                    char = "🔺"
                 elif diff < 0:
-                    state["price_trend"] = "🟥 TURUN"
-                    char = "▂"
+                    state["price_trend"] = "🔻 TURUN"
+                    char = "🔻"
                 else:
                     state["price_trend"] = "⏺ STABIL"
-                    char = "—"
+                    char = "⏺"
                 
-                # Update riwayat grafik mini teks
+                # Update riwayat grafik panah
                 state["chart_history"].append(char)
-                if len(state["chart_history"]) > 12:
+                if len(state["chart_history"]) > 10:
                     state["chart_history"].pop(0)
             
             state["last_market_price"] = new_price
@@ -162,7 +162,7 @@ def get_home_text(is_final=False):
     if state["is_cooldown"]:
         status_str = f"🟡 *COOLDOWN (REHAT HINGGA {state['cooldown_until']})*"
     elif state["is_running"]:
-        status_str = "🟢 *BERJALAN (MINI CHART AKTIF)*"
+        status_str = "🟢 *BERJALAN (ARROW CHART AKTIF)*"
     else:
         status_str = "🔴 *BERHENTI (STOPPED)*"
 
@@ -171,7 +171,7 @@ def get_home_text(is_final=False):
     total_equity = state["idr_balance"] + asset_val
     now_wib = get_wib_time()
 
-    mini_chart_visual = "".join(state["chart_history"])
+    arrow_chart_visual = "".join(state["chart_history"])
     pos_info = "⚡ *Posisi:* Menunggu Target 0.6%" if state["in_position"] else "💵 *Posisi:* Standby (Mencari Momentum)"
 
     if state["minute_logs"]:
@@ -185,10 +185,10 @@ def get_home_text(is_final=False):
         profit_str = f"Rp {profit_loss_minute:+,.2f}"
 
         return (
-            f"🤖 *BOT SCALPING MINI CHART*\n\n"
+            f"🤖 *BOT SCALPING ARROW CHART*\n\n"
             f"Status Bot: 🏁 *REKAP SESI SELESAI*\n"
             f"📈 *Harga Live:* Rp {price:,.0f} ({state['price_trend']})\n"
-            f"📊 *Grafik:* `{mini_chart_visual}`\n"
+            f"📊 *Grafik:* `{arrow_chart_visual}`\n"
             f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
             f"⏱ _Waktu Selesai: {now_wib} WIB_\n\n"
@@ -199,10 +199,10 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🤖 *BOT SCALPING MINI CHART*\n\n"
+        f"🤖 *BOT SCALPING ARROW CHART*\n\n"
         f"Status Bot: {status_str}\n"
         f"📈 *Harga Live:* Rp {price:,.0f} ({state['price_trend']})\n"
-        f"📊 *Grafik:* `{mini_chart_visual}`\n"
+        f"📊 *Grafik:* `{arrow_chart_visual}`\n"
         f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
         f"{pos_info}\n"
         f"⏱ _Live Ticker: {now_wib} WIB_\n\n"
@@ -211,7 +211,7 @@ def get_home_text(is_final=False):
     )
 
 # ==========================================
-# AUTO-REFRESH & MINI CHART LOOP
+# AUTO-REFRESH & ARROW CHART LOOP
 # ==========================================
 def auto_refresh_dashboard_loop():
     while True:
@@ -266,7 +266,7 @@ def minutely_reset_loop():
 # TRADING ENGINE: TARGET 0.6% & STOP LOSS 2%
 # ==========================================
 def trading_loop():
-    print("Engine Scalping Mini Chart Aktif...")
+    print("Engine Scalping Arrow Chart Aktif...")
     highest_price = 0.0
 
     while True:
@@ -379,8 +379,8 @@ def trading_loop():
 def get_status_text():
     price = get_indodax_price() or 0
     status = "Cooldown 5 Menit" if state["is_cooldown"] else ("Berjalan" if state["is_running"] else "Berhenti")
-    mini_chart_visual = "".join(state["chart_history"])
-    return f"📊 *STATUS BOT*\n\n• Kondisi: {status}\n• Harga Live: Rp {price:,.0f}\n• Grafik: `{mini_chart_visual}`\n• Target: Profit 0.6%\n• Risk Limit: Loss 2%"
+    arrow_chart_visual = "".join(state["chart_history"])
+    return f"📊 *STATUS BOT*\n\n• Kondisi: {status}\n• Harga Live: Rp {price:,.0f}\n• Grafik: `{arrow_chart_visual}`\n• Target: Profit 0.6%\n• Risk Limit: Loss 2%"
 
 def get_balance_text():
     price = get_indodax_price() or 0
@@ -426,8 +426,8 @@ def handle_update(update):
             update_menu(chat_id, msg_id, get_report_text(), is_home=False)
         elif data == "btn_price":
             price = get_indodax_price() or 0
-            mini_chart_visual = "".join(state["chart_history"])
-            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\n{PAIR.upper()}: Rp {price:,.0f}\nGrafik: `{mini_chart_visual}`", is_home=False)
+            arrow_chart_visual = "".join(state["chart_history"])
+            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\n{PAIR.upper()}: Rp {price:,.0f}\nGrafik: `{arrow_chart_visual}`", is_home=False)
         return
 
     if "message" in update:
