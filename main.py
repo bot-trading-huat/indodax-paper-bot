@@ -112,6 +112,11 @@ def update_menu(chat_id, message_id, text):
         "parse_mode": "Markdown",
         "reply_markup": get_main_keyboard()
     })
+    
+    # Jika pesan lama terhapus atau kedaluwarsa, buat pesan baru secara otomatis
+    if not res or not res.get("ok"):
+        send_menu(chat_id, text)
+        
     return res
 
 def answer_callback(callback_query_id, text=None):
@@ -223,7 +228,8 @@ def get_home_text():
 def auto_refresh_dashboard_loop():
     update_all_initial_prices()
 
-    if global_state["dashboard_chat_id"] and not global_state["dashboard_msg_id"]:
+    # Otomatis kirim pesan dasbor pertama begitu bot aktif tanpa perlu /start atau tombol manual
+    if global_state["dashboard_chat_id"]:
         initial_text = get_home_text()
         send_menu(global_state["dashboard_chat_id"], initial_text)
 
@@ -232,11 +238,10 @@ def auto_refresh_dashboard_loop():
             now_dt = datetime.now(WIB)
             current_minute_str = now_dt.strftime("%H:%M")
 
-            # Cek apakah sudah berganti menit untuk mengirim laporan final per menit
+            # Laporan Final per Menit berganti
             if global_state["last_reported_minute"] != current_minute_str and global_state["dashboard_chat_id"]:
                 global_state["last_reported_minute"] = current_minute_str
                 
-                # Hitung total equity untuk laporan final menit
                 total_eq = sum(coins_state[p]["idr_balance"] + (coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]) for p in PAIRS)
                 tot_w = sum(coins_state[p]["winning_trades"] for p in PAIRS)
                 tot_l = sum(coins_state[p]["losing_trades"] for p in PAIRS)
