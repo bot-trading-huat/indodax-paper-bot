@@ -23,10 +23,6 @@ ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "MASUKKAN_CHAT_ID_ANDA_DISINI")
 INITIAL_CAPITAL_PER_COIN = float(os.getenv("START_BALANCE", 100000)) / 3.0
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 
-# Format pair di Indodax menggunakan idr (misal: solidr, ethidr, dogeidr) 
-# Jika menggunakan USDT, pastikan endpoint sesuai. Mari kita gunakan pair IDR (solidr, ethidr, dogeidr) 
-# karena lebih stabil di public API Indodax, atau tetap usdt jika memang marketnya usdt.
-# Kita gunakan format standar Indodax: 'solidr', 'ethidr', 'dogeidr' agar harga akurat dalam Rupiah.
 PAIRS = ["solidr", "ethidr", "dogeidr"]
 
 coins_state = {}
@@ -64,7 +60,7 @@ def telegram(method, params=None):
     try:
         data = json.dumps(params or {}).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
@@ -95,17 +91,21 @@ def send_menu(chat_id, text):
     return res
 
 def update_menu(chat_id, message_id, text):
-    global_state["dashboard_msg_id"] = message_id
+    # Hindari pengiriman ulang request jika teks sama persis (mencegah rate limit Telegram)
+    if text == global_state["last_rendered_text"]:
+        return {"ok": True}
+
     global_state["dashboard_chat_id"] = chat_id
     global_state["last_rendered_text"] = text
 
-    return telegram("editMessageText", {
+    res = telegram("editMessageText", {
         "chat_id": str(chat_id),
         "message_id": message_id,
         "text": text,
         "parse_mode": "Markdown",
         "reply_markup": get_main_keyboard()
     })
+    return res
 
 def answer_callback(callback_query_id, text=None):
     payload = {"callback_query_id": callback_query_id}
@@ -147,13 +147,14 @@ def fetch_price(pair):
             
             st["last_market_price"] = new_price
             return new_price
-    except Exception as e:
-        # Jangan gunakan fallback angka kecil/palsu agar bot tidak salah eksekusi beli
+    except Exception:
         return st["last_market_price"]
 
 def update_all_initial_prices():
     for p in PAIRS:
-        fetch_price(p)
+        while coins_state[p]["last_market_price"] <= 0:
+            fetch_price(p)
+            time.sleep(0.5)
 
 # ==========================================
 # DASHBOARD TEXT BUILDER
@@ -164,7 +165,7 @@ def get_home_text():
     total_losses = 0
     now_wib = get_wib_time()
 
-    text_blocks = [f"🤖 *BOT MULTI-SCALPING INDODAX*\n"]
+    text_blocks = [f"🤖 *BOT MULTI-SCALPING INDODAX (LIVE)*\n"]
 
     for p in PAIRS:
         st = coins_state[p]
@@ -207,6 +208,7 @@ def get_home_text():
         block_text = f"```\nMemantau pergerakan pasar...\n```"
 
     text_blocks.append(f"\n📋 *RIWAYAT TRANSAKSI:*\n{block_text}")
+    # Menggunakan detik yang selalu berubah agar Telegram mendeteksi string sebagai perubahan unik
     text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n💰 *TOTAL KESELURUHAN SALDO:* *Rp {total_combined_equity:,.2f}*\n📊 *Total Win/Loss:* 🟢 {total_wins} | 🔴 {total_losses}\n⏱ _Live Ticker: {now_wib} WIB_")
 
     return "\n".join(text_blocks)
@@ -215,8 +217,10 @@ def get_home_text():
 # AUTO-REFRESH & TRADING LOOPS
 # ==========================================
 def auto_refresh_dashboard_loop():
+    # Pastikan harga awal sudah ter-fetch sebelum kirim pesan pertama
+    update_all_initial_prices()
+
     if global_state["dashboard_chat_id"] and not global_state["dashboard_msg_id"]:
-        update_all_initial_prices()
         initial_text = get_home_text()
         send_menu(global_state["dashboard_chat_id"], initial_text)
 
@@ -224,12 +228,11 @@ def auto_refresh_dashboard_loop():
         try:
             if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
                 new_text = get_home_text()
-                res = update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], new_text)
-                if res and res.get("ok"):
-                    global_state["last_rendered_text"] = new_text
+                update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], new_text)
         except Exception:
             pass
-        time.sleep(2)
+        # Jeda 3 detik pas agar terhindar dari pemblokiran rate limit Telegram API
+        time.sleep(3)
 
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
@@ -237,7 +240,6 @@ def single_coin_trading_worker(pair):
     pair_display = pair.upper().replace("IDR", "/IDR")
     print(f"Engine Trading untuk {pair_display} aktif...")
 
-    # Tunggu sebentar sampai harga pertama berhasil ditarik dengan benar
     while st["last_market_price"] <= 0:
         fetch_price(pair)
         time.sleep(1)
@@ -281,7 +283,7 @@ def single_coin_trading_worker(pair):
                     st["logs"].append(f"[{now_wib}] COOLDOWN 5M")
                     continue
 
-                # 1. KONDISI BELI (ENTRY) - Pastikan modal mencukupi dan harga valid (> 1000)
+                # 1. KONDISI BELI (ENTRY)
                 if not st["in_position"] and st["idr_balance"] > 1000:
                     st["buy_price"] = current_price
                     highest_price = current_price
@@ -327,7 +329,7 @@ def single_coin_trading_worker(pair):
         except Exception as e:
             print(f"ENGINE ERROR ({pair}):", e)
 
-        time.sleep(1.5)
+        time.sleep(2)
 
 # ==========================================
 # TELEGRAM HANDLERS & POLLING
