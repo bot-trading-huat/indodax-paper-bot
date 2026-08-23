@@ -70,7 +70,7 @@ def get_main_keyboard():
         "inline_keyboard": [
             [play_stop_btn],
             [{"text": "📊 Status Bot & Posisi", "callback_data": "btn_status"}],
-            [{"text": "💰 Cek Saldo Demo", "callback_data": "btn_balance"}],
+            [{"text": "💰 Cek Saldo Real", "callback_data": "btn_balance"}],
             [{"text": "📈 Laporan PnL & WinRate", "callback_data": "btn_report"}],
             [{"text": "⚡ Cek Harga BTC Real-Time", "callback_data": "btn_price"}]
         ]
@@ -157,7 +157,7 @@ def get_home_text(is_final=False):
         profit_str = f"Rp {profit_loss_minute:+,.2f}"
 
         return (
-            f"🤖 *BOT TRADING INDODAX*\n\n"
+            f"🤖 *BOT TRADING INDODAX (REAL MARKET)*\n\n"
             f"Status Bot: 🏁 *REKAP SESI (SELESAI)*\n"
             f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
@@ -170,7 +170,7 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🤖 *BOT TRADING INDODAX*\n\n"
+        f"🤖 *BOT TRADING INDODAX (REAL MARKET)*\n\n"
         f"Status Bot: {status_str}\n"
         f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
         f"{pos_info}\n"
@@ -233,10 +233,10 @@ def minutely_reset_loop():
             print("MINUTELY RESET ERROR:", e)
 
 # ==========================================
-# ENGINE TRADING: TARGET 10% HARIAN & SAFETY
+# ENGINE TRADING: REAL MARKET & SAFETY
 # ==========================================
 def trading_loop():
-    print("Engine Trading Target 10% Aktif...")
+    print("Engine Trading Real Market Aktif...")
     highest_price = 0.0
 
     while True:
@@ -267,10 +267,6 @@ def trading_loop():
                         price_change_pct = (current_price - state["buy_price"]) / state["buy_price"]
                         drop_from_peak = (highest_price - current_price) / highest_price if highest_price > 0 else 0
 
-                        # Aturan Eksekusi Optimal Target 10% & Safety:
-                        # - Take Profit Target: Tercapai kenaikan +1.2% (Menutup fee 0.42% + bersih ~0.8%)
-                        # - Trailing Stop Cepat: Jika harga sempat naik tipis lalu koreksi turun 0.2% dari puncak
-                        # - Stop Loss Safety: Cut loss di -1.5% untuk pengaman modal agar tidak boncos dalam
                         is_target_hit = price_change_pct >= 0.012
                         is_trailing = (highest_price >= state["buy_price"] * 1.015) and (drop_from_peak >= 0.002)
                         is_stop_loss = price_change_pct <= -0.015
@@ -317,7 +313,7 @@ def get_balance_text():
     price = get_indodax_price() or 0
     asset_val = state["asset_balance"] * price
     equity = state["idr_balance"] + asset_val
-    return f"💰 *SALDO DEMO*\n\n• Saldo IDR: Rp {state['idr_balance']:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f}\n• Total Equity: Rp {equity:,.2f}"
+    return f"💰 *SALDO REAL*\n\n• Saldo IDR: Rp {state['idr_balance']:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f}\n• Total Equity: Rp {equity:,.2f}"
 
 def get_report_text():
     price = get_indodax_price() or 0
