@@ -48,7 +48,8 @@ for p in PAIRS:
 global_state = {
     "dashboard_msg_id": None,
     "dashboard_chat_id": ALLOWED_CHAT_ID,
-    "last_rendered_text": ""
+    "last_rendered_text": "",
+    "last_reported_minute": ""
 }
 
 # ==========================================
@@ -90,8 +91,14 @@ def send_menu(chat_id, text):
         global_state["last_rendered_text"] = text
     return res
 
+def send_new_message(chat_id, text):
+    return telegram("sendMessage", {
+        "chat_id": str(chat_id),
+        "text": text,
+        "parse_mode": "Markdown"
+    })
+
 def update_menu(chat_id, message_id, text):
-    # Hindari pengiriman ulang request jika teks sama persis (mencegah rate limit Telegram)
     if text == global_state["last_rendered_text"]:
         return {"ok": True}
 
@@ -113,15 +120,13 @@ def answer_callback(callback_query_id, text=None):
     return telegram("answerCallbackQuery", payload)
 
 # ==========================================
-# ROBUST PRICE FETCHER (INDODAX API)
+# ROBUST PRICE FETCHER
 # ==========================================
 def fetch_price(pair):
     url = f"https://indodax.com/api/ticker/{pair}"
     st = coins_state[pair]
     try:
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        })
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             new_price = float(data["ticker"]["last"])
@@ -208,16 +213,14 @@ def get_home_text():
         block_text = f"```\nMemantau pergerakan pasar...\n```"
 
     text_blocks.append(f"\n📋 *RIWAYAT TRANSAKSI:*\n{block_text}")
-    # Menggunakan detik yang selalu berubah agar Telegram mendeteksi string sebagai perubahan unik
     text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n💰 *TOTAL KESELURUHAN SALDO:* *Rp {total_combined_equity:,.2f}*\n📊 *Total Win/Loss:* 🟢 {total_wins} | 🔴 {total_losses}\n⏱ _Live Ticker: {now_wib} WIB_")
 
     return "\n".join(text_blocks)
 
 # ==========================================
-# AUTO-REFRESH & TRADING LOOPS
+# AUTO-REFRESH & MINUTE REPORT LOOPS
 # ==========================================
 def auto_refresh_dashboard_loop():
-    # Pastikan harga awal sudah ter-fetch sebelum kirim pesan pertama
     update_all_initial_prices()
 
     if global_state["dashboard_chat_id"] and not global_state["dashboard_msg_id"]:
@@ -226,12 +229,32 @@ def auto_refresh_dashboard_loop():
 
     while True:
         try:
+            now_dt = datetime.now(WIB)
+            current_minute_str = now_dt.strftime("%H:%M")
+
+            # Cek apakah sudah berganti menit untuk mengirim laporan final per menit
+            if global_state["last_reported_minute"] != current_minute_str and global_state["dashboard_chat_id"]:
+                global_state["last_reported_minute"] = current_minute_str
+                
+                # Hitung total equity untuk laporan final menit
+                total_eq = sum(coins_state[p]["idr_balance"] + (coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]) for p in PAIRS)
+                tot_w = sum(coins_state[p]["winning_trades"] for p in PAIRS)
+                tot_l = sum(coins_state[p]["losing_trades"] for p in PAIRS)
+                
+                report_msg = (
+                    f"📊 *LAPORAN FINAL MENIT [{current_minute_str} WIB]*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"💰 Total Saldo: Rp {total_eq:,.2f}\n"
+                    f"🎯 Akumulasi Win/Loss: 🟢 {tot_w} | 🔴 {tot_l}"
+                )
+                send_new_message(global_state["dashboard_chat_id"], report_msg)
+
             if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
                 new_text = get_home_text()
                 update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], new_text)
         except Exception:
             pass
-        # Jeda 3 detik pas agar terhindar dari pemblokiran rate limit Telegram API
+        
         time.sleep(3)
 
 def single_coin_trading_worker(pair):
