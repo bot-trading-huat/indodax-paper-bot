@@ -31,7 +31,7 @@ INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "6eecb43aefbf4796227bc66428
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 PAIRS = ["solidr", "usdtidr"]
 
-# Global variable untuk menyimpan saldo utama asli dari Indodax
+# Global variable untuk menyimpan saldo utama IDR dan total aset
 wallet_main_state = {
     "idr_balance": 0.0,
     "total_asset_equity": 0.0
@@ -72,7 +72,7 @@ def telegram(method, params=None):
         return None
 
 def indodax_private_request(method_name, extra_params=None):
-    """Menggunakan API V1 Indodax standar yang kompatibel untuk getInfo"""
+    """Menggunakan API V1 Indodax standar untuk getInfo"""
     if not INDODAX_API_KEY or not INDODAX_SECRET_KEY:
         return None
     url = "https://indodax.com/tapi"
@@ -108,17 +108,24 @@ def sync_real_wallet_balance():
     
     if res and res.get("success") == 1:
         ret = res.get("return", {})
-        balances = ret.get("balance", {}) # Saldo IDR utama
-        funds = ret.get("funds", {})      # Saldo koin
+        balances = ret.get("balance", {}) # Saldo IDR
+        funds = ret.get("funds", {})      # Saldo Aset Koin
         
-        # Ambil total saldo IDR utama (misal: 88,982)
-        idr_total = float(balances.get("idr", 0))
+        # Ambil total saldo IDR utama secara fleksibel
+        idr_total = 0.0
+        for key in ["idr", "IDR"]:
+            if key in balances:
+                idr_total = float(balances.get(key, 0))
+                break
+        if idr_total == 0.0 and "idr" in ret:
+            idr_total = float(ret.get("idr", 0))
+
         wallet_main_state["idr_balance"] = idr_total
         
         total_coins_val = 0.0
         for p in PAIRS:
             base_coin = p.replace("idr", "") # 'sol' atau 'usdt'
-            coin_bal = float(funds.get(base_coin, 0))
+            coin_bal = float(funds.get(base_coin, funds.get(base_coin.upper(), 0)))
             
             if coin_bal > 0:
                 coins_state[p]["asset_balance"] = coin_bal
@@ -129,7 +136,6 @@ def sync_real_wallet_balance():
                 
             total_coins_val += coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]
         
-        # Total Estimasi Aset = Saldo IDR Utama + Nilai Aset Koin yang sedang di-hold
         wallet_main_state["total_asset_equity"] = idr_total + total_coins_val
         print(f"Sinkronisasi Berhasil! Saldo IDR Utama: Rp {idr_total:,.2f}")
     else:
@@ -214,7 +220,6 @@ def fetch_price(pair):
     return st["last_market_price"]
 
 def get_indodax_style_dashboard():
-    # Perbarui total nilai aset berdasarkan saldo utama + nilai koin
     total_coins_val = sum(st["asset_balance"] * st["last_market_price"] for st in coins_state.values())
     total_equity = wallet_main_state["idr_balance"] + total_coins_val
     
