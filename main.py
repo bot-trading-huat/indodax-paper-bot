@@ -28,7 +28,6 @@ INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "6eecb43aefbf4796227bc66428
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 PAIRS = ["solidr", "tslaidr"]
 
-# Kontrol Risiko Keseluruhan (Max Loss 3%)
 global_risk_control = {
     "initial_total_capital": 0.0,
     "max_drawdown_pct": 0.03,
@@ -57,12 +56,12 @@ for p in PAIRS:
 
 global_state = {
     "dashboard_msg_id": None,
-    "dashboard_chat_id": ALLOWED_CHAT_ID,
+    "dashboard_chat_id": ALLOWED_CHAT_ID if ALLOWED_CHAT_ID else None,
     "last_rendered_text": ""
 }
 
 # ==========================================
-# API HELPERS
+# API HELPERS (Disesuaikan untuk Trade API V2)
 # ==========================================
 def telegram(method, params=None):
     if not TOKEN: return None
@@ -75,13 +74,14 @@ def telegram(method, params=None):
     except Exception:
         return None
 
-def indodax_private_request(method_name, extra_params=None):
-    if not INDODAX_API_KEY or not INDODAX_SECRET_KEY or "MASUKKAN" in INDODAX_API_KEY:
+def indodax_private_request(endpoint_path, extra_params=None):
+    if not INDODAX_API_KEY or not INDODAX_SECRET_KEY:
         return None
     
-    url = "https://indodax.com/tapi"
+    # Endpoint Trade API V2 Indodax menggunakan basis URL /tapi/v2/
+    url = f"https://indodax.com/tapi/v2/{endpoint_path}"
     nonce = str(int(time.time() * 1000))
-    params = {"method": method_name, "nonce": nonce}
+    params = {"nonce": nonce}
     if extra_params: params.update(extra_params)
         
     post_data = urllib.parse.urlencode(params).encode("utf-8")
@@ -99,12 +99,13 @@ def indodax_private_request(method_name, extra_params=None):
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        print(f"API Error ({method_name}):", e)
+        print(f"API V2 Error ({endpoint_path}):", e)
         return None
 
 def sync_real_wallet_balance():
+    # Menggunakan endpoint 'getInfo' untuk Trade API V2
     res = indodax_private_request("getInfo")
-    if res and res.get("success") == 1:
+    if res and (res.get("success") == 1 or res.get("status") == "success"):
         balances = res.get("return", {}).get("balance", {})
         idr_total = float(balances.get("idr", 0))
         
@@ -122,9 +123,9 @@ def sync_real_wallet_balance():
             if coin_bal > 0:
                 coins_state[p]["in_position"] = True
                 
-        print(f"Saldo Asli Disinkronkan. Total IDR: Rp {idr_total:,.2f}")
+        print(f"Saldo Asli V2 Disinkronkan. Total IDR: Rp {idr_total:,.2f}")
     else:
-        print("Gagal mengambil saldo asli.")
+        print("Gagal mengambil saldo asli V2:", res)
 
 def get_main_keyboard():
     return {
@@ -205,7 +206,7 @@ def update_all_initial_prices():
             time.sleep(0.3)
 
 # ==========================================
-# INDODAX-STYLE DASHBOARD BUILDER
+# DASHBOARD BUILDER
 # ==========================================
 def get_indodax_style_dashboard():
     total_combined_equity = 0.0
@@ -214,7 +215,6 @@ def get_indodax_style_dashboard():
     now_wib = get_wib_time()
     current_timestamp = time.time()
 
-    # Hitung total ekuitas terlebih dahulu untuk persentase aset
     for p in PAIRS:
         st = coins_state[p]
         price = st["last_market_price"]
@@ -224,7 +224,6 @@ def get_indodax_style_dashboard():
         total_wins += st["winning_trades"]
         total_losses += st["losing_trades"]
 
-    # Header ala Tampilan Saldo Indodax
     text_blocks = [
         f"📊 *INDODAX PORTFOLIO DASHBOARD* 📊\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -242,10 +241,8 @@ def get_indodax_style_dashboard():
         asset_val = st["asset_balance"] * price
         equity = st["idr_balance"] + asset_val
         
-        # Hitung persentase porsi aset terhadap total portofolio
         share_pct = (equity / total_combined_equity * 100) if total_combined_equity > 0 else 0.0
         
-        # Status Cooldown / Aktif / Stop
         if st["is_cooldown"]:
             remaining_cd = int(st["cooldown_until_time"] - current_timestamp)
             if remaining_cd > 0:
@@ -316,12 +313,12 @@ def auto_refresh_dashboard_loop():
         time.sleep(1)
 
 # ==========================================
-# TRADING WORKER DENGAN JEDA 5 MENIT JIKA LOSS
+# TRADING WORKER V2
 # ==========================================
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
     highest_price = 0.0
-    print(f"Engine All-In untuk {pair.upper()} aktif...")
+    print(f"Engine All-In V2 untuk {pair.upper()} aktif...")
 
     while st["last_market_price"] <= 0:
         fetch_price(pair)
@@ -349,7 +346,6 @@ def single_coin_trading_worker(pair):
                 now_wib = get_wib_time()
                 is_market_good = (st["price_trend"] == "🔺") or (len(st["chart_history"]) >= 3 and st["chart_history"][-1] == "▇")
 
-                # Kondisi ALL-IN BUY
                 if not st["in_position"] and st["idr_balance"] > 10000 and is_market_good:
                     indodax_private_request("trade", {
                         "pair": pair, "type": "buy",
@@ -365,7 +361,6 @@ def single_coin_trading_worker(pair):
                     st["logs"].append(f"[{now_wib}] ALL-IN BUY @ {current_price:,.0f}")
                     if len(st["logs"]) > 6: st["logs"].pop(0)
 
-                # Kondisi JUAL (Target 0.6% / Stop Loss -2%)
                 elif st["in_position"]:
                     if current_price > highest_price: highest_price = current_price
 
@@ -402,7 +397,7 @@ def single_coin_trading_worker(pair):
                         if len(st["logs"]) > 6: st["logs"].pop(0)
 
         except Exception as e:
-            print(f"ENGINE ERROR ({pair}):", e)
+            print(f"ENGINE ERROR V2 ({pair}):", e)
 
         time.sleep(1)
 
@@ -427,18 +422,28 @@ def handle_update(update):
         msg = update["message"]
         chat_id = msg.get("chat", {}).get("id")
         text = (msg.get("text") or "").strip()
-        if chat_id and (text.startswith("/start") or text.startswith("/menu")):
+        if not chat_id: return
+
+        if text.startswith("/id"):
+            telegram("sendMessage", {
+                "chat_id": chat_id,
+                "text": f"🔑 **Telegram Chat ID Anda adalah:** `{chat_id}`",
+                "parse_mode": "Markdown"
+            })
+            return
+
+        if text.startswith("/start") or text.startswith("/menu"):
             send_menu(chat_id, get_indodax_style_dashboard())
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Telegram Polling dengan Dashboard ala Indodax dimulai...")
+    print("Telegram Polling V2 dimulai...")
     while True:
         try:
             params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
             if offset is not None: params["offset"] = offset
-            res = telegram("getUpdates",params)
+            res = telegram("getUpdates", params)
             if res and res.get("ok"):
                 for upd in res.get("result", []):
                     offset = upd["update_id"] + 1
