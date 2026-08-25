@@ -102,30 +102,52 @@ def indodax_private_request(method_name, extra_params=None):
         return None
 
 def sync_real_wallet_balance():
-    """Mengambil saldo utama IDR dan aset koin langsung dari akun Indodax"""
+    """Mengambil saldo utama IDR dan aset koin langsung dari akun Indodax secara aman & akurat"""
     res = indodax_private_request("getInfo")
-    print("DEBUG RESPON INDODAX:", res)
+    print("--- DEBUG RESPONS INDODAX INFO ---")
+    print(json.dumps(res, indent=2))
+    print("-----------------------------------")
     
     if res and res.get("success") == 1:
         ret = res.get("return", {})
-        balances = ret.get("balance", {}) # Saldo IDR
-        funds = ret.get("funds", {})      # Saldo Aset Koin
+        balances = ret.get("balance", {}) # Berisi saldo IDR
+        funds = ret.get("funds", {})      # Berisi saldo aset koin
         
-        # Ambil total saldo IDR utama secara fleksibel
+        # Cek secara menyeluruh semua variasi key saldo IDR
         idr_total = 0.0
-        for key in ["idr", "IDR"]:
-            if key in balances:
-                idr_total = float(balances.get(key, 0))
-                break
-        if idr_total == 0.0 and "idr" in ret:
-            idr_total = float(ret.get("idr", 0))
+        for k in ["idr", "IDR", "rp", "RP"]:
+            if k in balances and balances[k] is not None:
+                try:
+                    idr_total = float(balances[k])
+                    if idr_total > 0:
+                        break
+                except ValueError:
+                    pass
+        
+        # Fallback jika ada di root return
+        if idr_total == 0.0:
+            for k in ["idr", "IDR", "balance_idr"]:
+                if k in ret and ret[k] is not None:
+                    try:
+                        idr_total = float(ret[k])
+                        if idr_total > 0:
+                            break
+                    except ValueError:
+                        pass
 
         wallet_main_state["idr_balance"] = idr_total
         
         total_coins_val = 0.0
         for p in PAIRS:
             base_coin = p.replace("idr", "") # 'sol' atau 'usdt'
-            coin_bal = float(funds.get(base_coin, funds.get(base_coin.upper(), 0)))
+            coin_bal = 0.0
+            for ck in [base_coin, base_coin.upper(), base_coin.lower()]:
+                if ck in funds and funds[ck] is not None:
+                    try:
+                        coin_bal = float(funds[ck])
+                        break
+                    except ValueError:
+                        pass
             
             if coin_bal > 0:
                 coins_state[p]["asset_balance"] = coin_bal
@@ -137,9 +159,9 @@ def sync_real_wallet_balance():
             total_coins_val += coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]
         
         wallet_main_state["total_asset_equity"] = idr_total + total_coins_val
-        print(f"Sinkronisasi Berhasil! Saldo IDR Utama: Rp {idr_total:,.2f}")
+        print(f"Sinkronisasi Sukses! Saldo IDR Utama Terbaca: Rp {idr_total:,.2f}")
     else:
-        print("Gagal mengambil saldo dari Indodax, periksa izin API Key / Secret Key.")
+        print("Gagal mengambil data dari Indodax. Periksa kembali API Key / Secret Key.")
 
 def get_main_keyboard():
     return {
