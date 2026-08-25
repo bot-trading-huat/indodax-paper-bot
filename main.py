@@ -41,7 +41,7 @@ state = {
     "minute_start_equity": 0.0,
     "minute_wins": 0,
     "minute_losses": 0,
-    "minute_logs": deque(["Bot disiapkan, menunggu start..."], maxlen=8),
+    "minute_logs": deque(["Bot siap, cek saldo..."], maxlen=8),
     
     # Dashboard Tracking
     "dashboard_chat_id": None,
@@ -128,11 +128,14 @@ def fetch_realtime_account():
                 balances = res.get("return", {}).get("balance", {})
                 balances_hold = res.get("return", {}).get("balance_hold", {})
                 
-                idr_cash = float(balances.get("idr", 0)) + float(balances_hold.get("idr", 0))
-                btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
+                # Pisahkan IDR Tunai murni untuk transaksi
+                idr_cash = float(balances.get("idr", 0))
+                idr_hold = float(balances_hold.get("idr", 0))
+                total_idr = idr_cash + idr_hold
                 
+                btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
                 btc_val = btc_amt * price
-                grand_total = idr_cash + btc_val
+                grand_total = total_idr + btc_val
                 
                 return True, idr_cash, btc_amt, grand_total, price, "OK"
             else:
@@ -192,7 +195,7 @@ def get_home_text(is_final=False):
         return (
             f"🤖 *BOT TRADING INDODAX*\n\n"
             f"Status Bot: 🏁 *REKAP SESI (SELESAI)*\n"
-            f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
+            f"💰 *Total Aset:* Rp {total_equity:,.2f} *(IDR Tunai: Rp {idr_bal:,.0f})*\n"
             f"{pos_info}\n"
             f"📈 Grafik: `{chart_str}`\n"
             f"⏱ _Waktu Selesai: {now_wib} WIB_\n\n"
@@ -206,7 +209,7 @@ def get_home_text(is_final=False):
     return (
         f"🤖 *BOT TRADING INDODAX*\n\n"
         f"Status Bot: {status_str}\n"
-        f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
+        f"💰 *Total Aset:* Rp {total_equity:,.2f} *(IDR Tunai: Rp {idr_bal:,.0f})*\n"
         f"{pos_info}\n"
         f"📈 Grafik: `{chart_str}`\n"
         f"⏱ _Live Update: {now_wib} WIB_\n\n"
@@ -323,7 +326,7 @@ def trading_loop():
                 if success and current_price > 0:
                     # 1. KONDISI BELI (ENTRY)
                     if not state["in_position"]:
-                        if idr_cash > 50000:  # Validasi batas minimal balance aman
+                        if idr_cash >= 10000:  # Batas minimum aman order IDR Indodax
                             buy_idr = idr_cash * 0.995 
                             add_log(f"Mencoba BUY BTC dg Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order("buy", amount_idr=buy_idr)
@@ -336,9 +339,10 @@ def trading_loop():
                             else:
                                 add_log(f"Gagal BUY: {res_data}")
                         else:
-                            # Log peringatan jika saldo IDR kurang dari minimum trading exchange
-                            if not any("Saldo IDR < Min Order" in log for log in state["minute_logs"]):
-                                add_log(f"Saldo IDR (Rp {idr_cash:,.0f}) kurang untuk order.")
+                            # Cek agar log tidak menumpuk spam setiap detik
+                            warning_msg = f"IDR Tunai Rp {idr_cash:,.0f} (< Rp 10k)"
+                            if not any(warning_msg in log for log in state["minute_logs"]):
+                                add_log(f"Peringatan: Saldo IDR Tunai kurang ({idr_cash:,.0f}).")
 
                     # 2. KONDISI KELOLA POSISI (SELL)
                     elif state["in_position"]:
@@ -388,12 +392,12 @@ def get_status_text():
     success, idr_bal, btc_amt, _, price, _ = fetch_realtime_account()
     status_str = f"Berjalan {state['price_trend']}" if state["is_running"] else f"Berhenti {state['price_trend']}"
     pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else "Standby (Persiapan Beli)"
-    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/IDR\n• Harga BTC saat ini: Rp {price:,.0f}\n• Posisi: {pos}"
+    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/IDR\n• Harga BTC saat ini: Rp {price:,.0f}\n• IDR Tunai: Rp {idr_bal:,.2f}\n• Posisi: {pos}"
 
 def get_balance_text():
     success, idr_bal, btc_amt, equity, price, _ = fetch_realtime_account()
     asset_val = btc_amt * price
-    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo IDR: Rp {idr_bal:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Equity: Rp {equity:,.2f}"
+    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Equity: Rp {equity:,.2f}"
 
 def get_report_text():
     success, _, _, equity, price, _ = fetch_realtime_account()
