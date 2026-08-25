@@ -25,8 +25,8 @@ def get_wib_datetime():
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8026634236")
 
-INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "JCHAJJYO-GERKVM4O-2IJLK5QY-2KO7MPFL-UOJTQD5S")
-INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "6eecb43aefbf4796227bc664286d9a8c802698da9c316a1decef6f59ca9c5c5a6030cf3406cb6377")
+INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK")
+INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b")
 
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 PAIRS = ["solidr", "usdtidr"]
@@ -66,13 +66,18 @@ def telegram(method, params=None):
     except Exception:
         return None
 
-def indodax_private_request(endpoint_path, extra_params=None):
+def indodax_private_request(method_name, extra_params=None):
+    """Menggunakan API V1 Indodax standar yang kompatibel untuk getInfo"""
     if not INDODAX_API_KEY or not INDODAX_SECRET_KEY:
         return None
-    url = f"https://indodax.com/tapi/v2/{endpoint_path}"
+    url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
-    params = {"nonce": nonce}
-    if extra_params: params.update(extra_params)
+    params = {
+        "method": method_name,
+        "nonce": nonce
+    }
+    if extra_params: 
+        params.update(extra_params)
         
     post_data = urllib.parse.urlencode(params).encode("utf-8")
     sign = hmac.new(INDODAX_SECRET_KEY.encode('utf-8'), post_data, hashlib.sha512).hexdigest()
@@ -85,17 +90,21 @@ def indodax_private_request(endpoint_path, extra_params=None):
     try:
         req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw_response = resp.read().decode("utf-8")
+            return json.loads(raw_response)
     except Exception as e:
-        print(f"API Error ({endpoint_path}):", e)
+        print(f"API Error ({method_name}):", e)
         return None
 
 def sync_real_wallet_balance():
     """Mengambil saldo IDR dan koin langsung dari akun Indodax pengguna"""
     res = indodax_private_request("getInfo")
-    if res and ("return" in res or res.get("success") == 1):
+    print("DEBUG RESPON INDODAX:", res) # Cek output ini di terminal/console Anda
+    
+    if res and res.get("success") == 1:
         ret = res.get("return", {})
-        balances = ret.get("balance", ret.get("balances", {}))
+        balances = ret.get("balance", {}) # Saldo IDR
+        funds = ret.get("funds", {})      # Saldo Aset Koin (sol, usdt, dll)
         
         # Ambil total saldo IDR asli
         idr_total = float(balances.get("idr", 0))
@@ -106,14 +115,18 @@ def sync_real_wallet_balance():
             
             # Cek saldo koin spesifik (misal: sol, usdt) di dompet asli
             base_coin = p.replace("idr", "") # 'solidr' -> 'sol', 'usdtidr' -> 'usdt'
-            coin_bal = float(balances.get(base_coin, 0))
+            coin_bal = float(funds.get(base_coin, balances.get(base_coin, 0)))
+            
             if coin_bal > 0:
                 coins_state[p]["asset_balance"] = coin_bal
                 coins_state[p]["in_position"] = True
+            else:
+                coins_state[p]["asset_balance"] = 0.0
+                coins_state[p]["in_position"] = False
                 
         print(f"Sinkronisasi Berhasil! Saldo IDR Asli di Indodax: Rp {idr_total:,.2f}")
     else:
-        print("Gagal mengambil saldo dari Indodax, periksa API Key / Secret Key.")
+        print("Gagal mengambil saldo dari Indodax, periksa izin API Key / Secret Key (pastikan mencentang Info & Trade).")
 
 def get_main_keyboard():
     return {
