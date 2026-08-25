@@ -154,6 +154,7 @@ def get_main_keyboard():
         "inline_keyboard": [
             [play_stop_btn],
             [{"text": "📊 Status Bot & Posisi", "callback_data": "btn_status"}],
+            [{"text": "💰 Cek Saldo Akun", "callback_data": "btn_balance"}],
             [{"text": "📈 Laporan PnL & WinRate", "callback_data": "btn_report"}],
             [{"text": "⚡ Cek Harga BTC Real-Time", "callback_data": "btn_price"}]
         ]
@@ -179,6 +180,7 @@ def get_home_text(is_final=False):
 
     pos_info = f"• Posisi: Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else f"• Posisi: IDR Ready (Rp {idr_bal:,.0f})"
     chart_str = generate_block_chart()
+    asset_val = btc_amt * price
 
     if state["minute_logs"]:
         logs_str = "\n".join(state["minute_logs"])
@@ -192,8 +194,10 @@ def get_home_text(is_final=False):
 
         return (
             f"🔹 *BTC/IDR* {status_str} {state['price_trend']}\n"
-            f"• Harga: Rp {price:,.2f}\n"
-            f"• Nilai: Rp {btc_amt * price:,.2f}\n"
+            f"• Harga BTC: Rp {price:,.2f}\n"
+            f"• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n"
+            f"• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n"
+            f"• *Total Keseluruhan (Equity): Rp {total_equity:,.2f}*\n"
             f"• Grafik: `{chart_str}`\n"
             f"{pos_info}\n"
             f"⏱ _Waktu Selesai: {now_wib} WIB_\n\n"
@@ -206,8 +210,10 @@ def get_home_text(is_final=False):
 
     return (
         f"🔹 *BTC/IDR* {status_str} {state['price_trend']}\n"
-        f"• Harga: Rp {price:,.2f}\n"
-        f"• Nilai: Rp {btc_amt * price:,.2f}\n"
+        f"• Harga BTC: Rp {price:,.2f}\n"
+        f"• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n"
+        f"• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n"
+        f"• *Total Keseluruhan (Equity): Rp {total_equity:,.2f}*\n"
         f"• Grafik: `{chart_str}`\n"
         f"{pos_info}\n\n"
         f"📊 *REKAP PERFORMA:*\n"
@@ -222,7 +228,6 @@ def get_home_text(is_final=False):
 def auto_refresh_dashboard_loop():
     while True:
         try:
-            # Tetap ambil harga secara berkala agar grafik terbarui meskipun bot tidak sedang running
             get_indodax_price()
             if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 new_text = get_home_text()
@@ -253,7 +258,6 @@ def minutely_reset_loop():
                 
                 state["dashboard_msg_id"] = None
                 
-                # Edit pesan lama menjadi laporan akhir sesi 1 menit
                 telegram("editMessageText", {
                     "chat_id": str(state["dashboard_chat_id"]),
                     "message_id": old_msg_id,
@@ -268,7 +272,6 @@ def minutely_reset_loop():
                 state["minute_logs"].clear()
                 add_log("Sesi 1 menit baru dimulai.")
 
-                # Kirim dashboard baru untuk melanjutkan pemantauan
                 new_home_text = get_home_text()
                 resp = telegram("sendMessage", {
                     "chat_id": str(state["dashboard_chat_id"]),
@@ -280,7 +283,6 @@ def minutely_reset_loop():
                     state["dashboard_msg_id"] = resp["result"]["message_id"]
                     state["last_rendered_text"] = new_home_text
 
-            # Cek apakah jam 00.00 WIB untuk laporan harian
             now_dt = datetime.now(WIB)
             if now_dt.hour == 0 and now_dt.minute == 0:
                 if state["dashboard_chat_id"]:
@@ -295,7 +297,7 @@ def minutely_reset_loop():
                         "text": daily_report,
                         "parse_mode": "Markdown"
                     })
-                time.sleep(70) # Mencegah double trigger di menit 00:00
+                time.sleep(70)
         except Exception as e:
             print("MINUTELY / DAILY RESET ERROR:", e)
 
@@ -344,7 +346,6 @@ def trading_loop():
                 success, idr_cash, btc_amt, total_equity, current_price, err = fetch_realtime_account()
 
                 if success and current_price > 0:
-                    # 1. KONDISI BELI (ENTRY)
                     if not state["in_position"]:
                         if idr_cash >= 10000: 
                             buy_idr = idr_cash * 0.995 
@@ -363,7 +364,6 @@ def trading_loop():
                             if not any(warning_msg in log for log in state["minute_logs"]):
                                 add_log(f"Peringatan: Saldo IDR Tunai kurang.")
 
-                    # 2. KONDISI KELOLA POSISI (SELL)
                     elif state["in_position"]:
                         if current_price > highest_price:
                             highest_price = current_price
@@ -402,7 +402,7 @@ def trading_loop():
         except Exception as e:
             print("ENGINE ERROR:", e)
 
-        time.sleep(10) # Berjalan terus setiap 10 detik
+        time.sleep(10)
 
 # ==========================================
 # TELEGRAM HANDLER
@@ -416,11 +416,11 @@ def get_status_text():
 def get_balance_text():
     success, idr_bal, btc_amt, equity, price, _ = fetch_realtime_account()
     asset_val = btc_amt * price
-    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Equity: Rp {equity:,.2f}"
+    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Keseluruhan (Equity): Rp {equity:,.2f}"
 
 def get_report_text():
     success, _, _, equity, price, _ = fetch_realtime_account()
-    return f"📈 *LAPORAN PERFORMA*\n\n• Total Equity: Rp {equity:,.2f}\n• Total Trade: {state['total_trades']}x\n• Total Win: {state['winning_trades']} | Total Lose: {state['losing_trades']}"
+    return f"📈 *LAPORAN PERFORMA*\n\n• Total Keseluruhan (Equity): Rp {equity:,.2f}\n• Total Trade: {state['total_trades']}x\n• Total Win: {state['winning_trades']} | Total Lose: {state['losing_trades']}"
 
 def answer_callback(cb_id, text=""):
     telegram("answerCallbackQuery", {"callback_query_id": cb_id, "text": text, "show_alert": False})
