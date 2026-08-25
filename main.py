@@ -4,6 +4,8 @@ import threading
 import urllib.request
 import urllib.parse
 import json
+import hmac
+import hashlib
 from datetime import datetime, timezone, timedelta
 
 import sys
@@ -17,28 +19,38 @@ def get_wib_time():
 # ==========================================
 # CONFIGURATION
 # ==========================================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "MASUKKAN_TOKEN_ANDA_DISINI")
-ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "MASUKKAN_CHAT_ID_ANDA_DISINI")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "MASUKKAN_TELEGRAM_BOT_TOKEN_ANDA")
 
-INITIAL_CAPITAL_PER_COIN = float(os.getenv("START_BALANCE", 100000)) / 3.0
+# Kosongkan saja! Bot akan otomatis mengisi Chat ID Anda saat Anda ketik /start di Telegram
+ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "MASUKKAN_INDODAX_API_KEY_ANDA")
+INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "MASUKKAN_INDODAX_SECRET_KEY_ANDA")
+
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
+PAIRS = ["solidr", "tslaidr"]
 
-PAIRS = ["solidr", "ethidr", "dogeidr"]
+# Kontrol Risiko Keseluruhan (Max Loss 3%)
+global_risk_control = {
+    "initial_total_capital": 0.0,
+    "max_drawdown_pct": 0.03,
+    "portfolio_stopped": False,
+    "stop_reason": ""
+}
 
 coins_state = {}
 for p in PAIRS:
     coins_state[p] = {
         "is_running": True,
         "is_cooldown": False,
-        "cooldown_until": "",
-        "idr_balance": INITIAL_CAPITAL_PER_COIN,
+        "cooldown_until_time": 0.0,
+        "idr_balance": 0.0,
         "asset_balance": 0.0,
         "in_position": False,
         "buy_price": 0.0,
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,
-        "minute_start_equity": INITIAL_CAPITAL_PER_COIN,
         "logs": [],
         "last_market_price": 0.0,
         "price_trend": "⏺",
@@ -47,12 +59,12 @@ for p in PAIRS:
 
 global_state = {
     "dashboard_msg_id": None,
-    "dashboard_chat_id": ALLOWED_CHAT_ID,
+    "dashboard_chat_id": ALLOWED_CHAT_ID if ALLOWED_CHAT_ID else None,
     "last_rendered_text": ""
 }
 
 # ==========================================
-# TELEGRAM FUNCTIONS
+# API HELPERS
 # ==========================================
 def telegram(method, params=None):
     if not TOKEN: return None
@@ -65,14 +77,60 @@ def telegram(method, params=None):
     except Exception:
         return None
 
-def get_main_keyboard():
-    all_running = all(coins_state[p]["is_running"] for p in PAIRS)
-    play_stop_text = "⏹ Hentikan Semua Bot" if all_running else "▶️ Jalankan Semua Bot"
-    play_stop_cb = "btn_stop_all" if all_running else "btn_start_all"
+def indodax_private_request(method_name, extra_params=None):
+    if not INDODAX_API_KEY or not INDODAX_SECRET_KEY or "MASUKKAN" in INDODAX_API_KEY:
+        return None
+    
+    url = "https://indodax.com/tapi"
+    nonce = str(int(time.time() * 1000))
+    params = {"method": method_name, "nonce": nonce}
+    if extra_params: params.update(extra_params)
+        
+    post_data = urllib.parse.urlencode(params).encode("utf-8")
+    sign = hmac.new(INDODAX_SECRET_KEY.encode('utf-8'), post_data, hashlib.sha512).hexdigest()
+    
+    headers = {
+        "Key": INDODAX_API_KEY,
+        "Sign": sign,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0"
+    }
+    
+    try:
+        req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"API Error ({method_name}):", e)
+        return None
 
+def sync_real_wallet_balance():
+    res = indodax_private_request("getInfo")
+    if res and res.get("success") == 1:
+        balances = res.get("return", {}).get("balance", {})
+        idr_total = float(balances.get("idr", 0))
+        
+        if global_risk_control["initial_total_capital"] == 0.0 and idr_total > 0:
+            global_risk_control["initial_total_capital"] = idr_total
+
+        share_idr = idr_total / len(PAIRS) if len(PAIRS) > 0 else 0
+        
+        for p in PAIRS:
+            coin_code = p.replace("idr", "").replace("x", "")
+            coin_bal = float(balances.get(p.replace("idr", ""), balances.get(coin_code, 0.0)))
+            
+            coins_state[p]["idr_balance"] = share_idr
+            coins_state[p]["asset_balance"] = coin_bal
+            if coin_bal > 0:
+                coins_state[p]["in_position"] = True
+                
+        print(f"Saldo Asli Disinkronkan. Total IDR: Rp {idr_total:,.2f}")
+    else:
+        print("Gagal mengambil saldo asli.")
+
+def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": play_stop_text, "callback_data": play_stop_cb}],
             [{"text": "🔄 Refresh Dashboard", "callback_data": "btn_refresh"}]
         ]
     }
@@ -91,9 +149,7 @@ def send_menu(chat_id, text):
     return res
 
 def update_menu(chat_id, message_id, text):
-    if text == global_state["last_rendered_text"]:
-        return {"ok": True}
-
+    if text == global_state["last_rendered_text"]: return {"ok": True}
     global_state["dashboard_chat_id"] = chat_id
     global_state["last_rendered_text"] = text
 
@@ -104,14 +160,11 @@ def update_menu(chat_id, message_id, text):
         "parse_mode": "Markdown",
         "reply_markup": get_main_keyboard()
     })
-    
-    if not res or not res.get("ok"):
-        send_menu(chat_id, text)
-        
+    if not res or not res.get("ok"): send_menu(chat_id, text)
     return res
 
-def answer_callback(callback_query_id, text=None):
-    payload = {"callback_query_id": callback_query_id}
+def answer_callback(cb_id, text=None):
+    payload = {"callback_query_id": cb_id}
     if text: payload["text"] = text
     return telegram("answerCallbackQuery", payload)
 
@@ -126,9 +179,7 @@ def fetch_price(pair):
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             new_price = float(data["ticker"]["last"])
-            
-            if new_price <= 0:
-                return st["last_market_price"]
+            if new_price <= 0: return st["last_market_price"]
 
             if st["last_market_price"] > 0 and new_price != st["last_market_price"]:
                 diff = new_price - st["last_market_price"]
@@ -141,10 +192,8 @@ def fetch_price(pair):
                 else:
                     st["price_trend"] = "⏺"
                     char = "—"
-                
                 st["chart_history"].append(char)
-                if len(st["chart_history"]) > 6:
-                    st["chart_history"].pop(0)
+                if len(st["chart_history"]) > 6: st["chart_history"].pop(0)
             
             st["last_market_price"] = new_price
             return new_price
@@ -158,15 +207,14 @@ def update_all_initial_prices():
             time.sleep(0.3)
 
 # ==========================================
-# DASHBOARD TEXT BUILDER
+# INDODAX-STYLE DASHBOARD BUILDER
 # ==========================================
-def get_home_text():
+def get_indodax_style_dashboard():
     total_combined_equity = 0.0
     total_wins = 0
     total_losses = 0
     now_wib = get_wib_time()
-
-    text_blocks = [f"🤖 *BOT MULTI-SCALPING INDODAX (LIVE)*\n"]
+    current_timestamp = time.time()
 
     for p in PAIRS:
         st = coins_state[p]
@@ -177,24 +225,60 @@ def get_home_text():
         total_wins += st["winning_trades"]
         total_losses += st["losing_trades"]
 
+    text_blocks = [
+        f"📊 *INDODAX PORTFOLIO DASHBOARD* 📊\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 *Estimasi Total Aset:* *Rp {total_combined_equity:,.2f}*\n"
+    ]
+
+    if global_risk_control["portfolio_stopped"]:
+        text_blocks.append(f"🚨 *STATUS: DARURAT (RISK LIMIT 3% TERPICU)*\n_Alasan: {global_risk_control['stop_reason']}_\n")
+
+    text_blocks.append(f"📦 *Rincian Saldo Per Aset (Fund Balance):*")
+
+    for p in PAIRS:
+        st = coins_state[p]
+        price = st["last_market_price"]
+        asset_val = st["asset_balance"] * price
+        equity = st["idr_balance"] + asset_val
+        share_pct = (equity / total_combined_equity * 100) if total_combined_equity > 0 else 0.0
+        
         if st["is_cooldown"]:
-            status = "🟡 Cooldown"
-        elif st["is_running"]:
-            status = f"🟢 Jalan ({st['price_trend']})"
+            remaining_cd = int(st["cooldown_until_time"] - current_timestamp)
+            if remaining_cd > 0:
+                status = f"⏳ Cooldown ({remaining_cd}s)"
+            else:
+                st["is_cooldown"] = False
+                status = f"🟢 Aktif ({st['price_trend']})"
+        elif global_risk_control["portfolio_stopped"]:
+            status = "🛑 Berhenti"
         else:
-            status = "🔴 Berhenti"
+            status = f"🟢 Aktif ({st['price_trend']})"
 
         chart_vis = "".join(st["chart_history"])
-        pos_str = "⚡ Target 0.6%" if st["in_position"] else "💵 Standby"
-        pair_display = p.upper().replace("IDR", "/IDR")
+        pos_str = f"All-In ({st['asset_balance']:,.4f})" if st["in_position"] else f"IDR Ready (Rp {st['idr_balance']:,.0f})"
+        pair_display = p.upper().replace("IDR", "/IDR").replace("X", "X/IDR")
+        coin_name = p.replace("idr", "").upper()
 
         text_blocks.append(
-            f"🔹 *{pair_display}* | {status}\n"
-            f"   • Harga: Rp {price:,.2f}\n"
-            f"   • Grafik: `{chart_vis}`\n"
-            f"   • Saldo: Rp {equity:,.2f} ({pos_str})\n"
-            f"   • Win: {st['winning_trades']} | Loss: {st['losing_trades']}"
+            f"\n🔹 *{pair_display}* [{status}]\n"
+            f"   • Pegang {coin_name}: `{st['asset_balance']:.6f}`\n"
+            f"   • Nilai Aset: Rp {asset_val:,.2f} *({share_pct:.1f}% dari total)*\n"
+            f"   • Harga Pasar: Rp {price:,.2f}\n"
+            f"   • Grafik Tren: `{chart_vis}`\n"
+            f"   • Posisi: {pos_str}\n"
+            f"   • Statistik: 🟢 {st['winning_trades']} Win | 🔴 {st['losing_trades']} Loss"
         )
+
+    init_cap = global_risk_control["initial_total_capital"]
+    if init_cap > 0 and not global_risk_control["portfolio_stopped"]:
+        loss_amount = init_cap - total_combined_equity
+        loss_pct = loss_amount / init_cap
+        if loss_pct >= global_risk_control["max_drawdown_pct"]:
+            global_risk_control["portfolio_stopped"] = True
+            global_risk_control["stop_reason"] = f"Total loss mencapai {loss_pct*100:.2f}% (Batas max 3%)"
+            for cp in PAIRS:
+                coins_state[cp]["is_running"] = False
 
     all_logs = []
     for p in PAIRS:
@@ -206,176 +290,4 @@ def get_home_text():
         logs_str = "\n".join(all_logs[-4:])
         block_text = f"```\n{logs_str}\n```"
     else:
-        block_text = f"```\nMemantau pergerakan pasar...\n```"
-
-    text_blocks.append(f"\n📋 *RIWAYAT TRANSAKSI:*\n{block_text}")
-    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n💰 *TOTAL KESELURUHAN SALDO:* *Rp {total_combined_equity:,.2f}*\n📊 *Total Win/Loss:* 🟢 {total_wins} | 🔴 {total_losses}\n⏱ _Live Ticker: {now_wib} WIB_")
-
-    return "\n".join(text_blocks)
-
-# ==========================================
-# AUTO-REFRESH LIVE TICKER LOOP (1 Detik)
-# ==========================================
-def auto_refresh_dashboard_loop():
-    update_all_initial_prices()
-
-    if global_state["dashboard_chat_id"]:
-        initial_text = get_home_text()
-        send_menu(global_state["dashboard_chat_id"], initial_text)
-
-    while True:
-        try:
-            if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
-                new_text = get_home_text()
-                update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], new_text)
-        except Exception:
-            pass
-        
-        time.sleep(1) # Live ticker berjalan mulus tiap 1 detik
-
-# ==========================================
-# TRADING WORKER (FAST & RESPONSIVE)
-# ==========================================
-def single_coin_trading_worker(pair):
-    st = coins_state[pair]
-    highest_price = 0.0
-    pair_display = pair.upper().replace("IDR", "/IDR")
-    print(f"Engine Trading untuk {pair_display} aktif...")
-
-    while st["last_market_price"] <= 0:
-        fetch_price(pair)
-        time.sleep(0.5)
-
-    st["minute_start_equity"] = st["idr_balance"]
-
-    while True:
-        try:
-            current_price = fetch_price(pair)
-            if current_price <= 0:
-                time.sleep(1)
-                continue
-
-            if st["is_cooldown"]:
-                now_dt = datetime.now(WIB)
-                cooldown_end_dt = datetime.strptime(st["cooldown_until"], "%H:%M:%S").replace(
-                    year=now_dt.year, month=now_dt.month, day=now_dt.day, tzinfo=WIB
-                )
-                if now_dt >= cooldown_end_dt:
-                    st["is_cooldown"] = False
-                    st["is_running"] = True
-                    st["minute_start_equity"] = st["idr_balance"] + (st["asset_balance"] * current_price)
-                time.sleep(2)
-                continue
-
-            if st["is_running"]:
-                now_wib = get_wib_time()
-                current_equity = st["idr_balance"] + (st["asset_balance"] * current_price)
-
-                # 1. KONDISI BELI (ENTRY)
-                if not st["in_position"] and st["idr_balance"] > 1000:
-                    st["buy_price"] = current_price
-                    highest_price = current_price
-                    
-                    net_idr = st["idr_balance"] * (1 - FEE_RATE)
-                    st["asset_balance"] = net_idr / current_price
-                    st["idr_balance"] = 0.0
-                    st["in_position"] = True
-
-                    st["logs"].append(f"[{now_wib}] BUY @ {current_price:,.0f}")
-                    if len(st["logs"]) > 6: st["logs"].pop(0)
-
-                # 2. KONDISI JUAL (TARGET 0.6% / STOP LOSS -2%)
-                elif st["in_position"]:
-                    if current_price > highest_price:
-                        highest_price = current_price
-
-                    price_change_pct = (current_price - st["buy_price"]) / st["buy_price"]
-                    is_target_hit = price_change_pct >= 0.006
-                    is_stop_loss = price_change_pct <= -0.02
-
-                    if is_target_hit or is_stop_loss:
-                        gross = st["asset_balance"] * current_price
-                        net_idr = gross * (1 - FEE_RATE)
-                        pnl_idr = net_idr - (st["asset_balance"] * st["buy_price"])
-                        
-                        st["idr_balance"] = net_idr
-                        st["asset_balance"] = 0.0
-                        st["in_position"] = False
-                        st["total_trades"] += 1
-                        highest_price = 0.0
-
-                        if price_change_pct > 0:
-                            st["winning_trades"] += 1
-                            tag = "WIN (+0.6%)"
-                        else:
-                            st["losing_trades"] += 1
-                            tag = "LOSS (-2%)"
-
-                        st["logs"].append(f"[{now_wib}] {tag} ({pnl_idr:+,.0f})")
-                        if len(st["logs"]) > 6: st["logs"].pop(0)
-
-        except Exception as e:
-            print(f"ENGINE ERROR ({pair}):", e)
-
-        time.sleep(1)
-
-# ==========================================
-# TELEGRAM HANDLERS & POLLING
-# ==========================================
-def handle_update(update):
-    if "callback_query" in update:
-        cb = update["callback_query"]
-        cb_id = cb["id"]
-        chat_id = cb["message"]["chat"]["id"]
-        msg_id = cb["message"]["message_id"]
-        data = cb.get("data", "")
-
-        if data == "btn_start_all":
-            for p in PAIRS:
-                coins_state[p]["is_running"] = True
-                coins_state[p]["is_cooldown"] = False
-            answer_callback(cb_id, "▶️ Semua bot dijalankan.")
-            update_menu(chat_id, msg_id, get_home_text())
-        elif data == "btn_stop_all":
-            for p in PAIRS:
-                coins_state[p]["is_running"] = False
-                coins_state[p]["is_cooldown"] = False
-            answer_callback(cb_id, "⏹ Semua bot dihentikan.")
-            update_menu(chat_id, msg_id, get_home_text())
-        elif data == "btn_refresh":
-            answer_callback(cb_id, "🔄 Data diperbarui.")
-            update_menu(chat_id, msg_id, get_home_text())
-        return
-
-    if "message" in update:
-        msg = update["message"]
-        chat_id = msg.get("chat", {}).get("id")
-        text = (msg.get("text") or "").strip()
-        if not chat_id: return
-
-        if text.startswith("/start") or text.startswith("/menu"):
-            send_menu(chat_id, get_home_text())
-
-def polling():
-    offset = None
-    telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Polling Telegram Multi-Bot dimulai...")
-    while True:
-        try:
-            params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
-            if offset is not None: params["offset"] = offset
-            res = telegram("getUpdates", params)
-            if res and res.get("ok"):
-                for upd in res.get("result", []):
-                    offset = upd["update_id"] + 1
-                    handle_update(upd)
-        except Exception as e:
-            print("POLLING ERROR:", e)
-            time.sleep(3)
-
-if __name__ == "__main__":
-    for p in PAIRS:
-        threading.Thread(target=single_coin_trading_worker, args=(p,), daemon=True).start()
-
-    threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
-    polling()
+        block_text = f"```\nMemantau market... siap mengeksekusi.\n
