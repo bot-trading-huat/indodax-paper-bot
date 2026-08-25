@@ -19,11 +19,11 @@ def get_wib_time():
 # ==========================================
 # CONFIGURATION
 # ==========================================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
+ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8026634236")
 
-INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "")
-INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "")
+INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "JCHAJJYO-GERKVM4O-2IJLK5QY-2KO7MPFL-UOJTQD5S")
+INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "6eecb43aefbf4796227bc664286d9a8c802698da9c316a1decef6f59ca9c5c5a6030cf3406cb6377")
 
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 PAIRS = ["solidr", "tslaidr"]
@@ -57,7 +57,7 @@ for p in PAIRS:
 
 global_state = {
     "dashboard_msg_id": None,
-    "dashboard_chat_id": ALLOWED_CHAT_ID if ALLOWED_CHAT_ID else None,
+    "dashboard_chat_id": ALLOWED_CHAT_ID,
     "last_rendered_text": ""
 }
 
@@ -70,14 +70,13 @@ def telegram(method, params=None):
     try:
         data = json.dumps(params or {}).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print(f"Telegram API Error ({method}):", e)
+    except Exception:
         return None
 
 def indodax_private_request(method_name, extra_params=None):
-    if not INDODAX_API_KEY or not INDODAX_SECRET_KEY:
+    if not INDODAX_API_KEY or not INDODAX_SECRET_KEY or "MASUKKAN" in INDODAX_API_KEY:
         return None
     
     url = "https://indodax.com/tapi"
@@ -85,22 +84,22 @@ def indodax_private_request(method_name, extra_params=None):
     params = {"method": method_name, "nonce": nonce}
     if extra_params: params.update(extra_params)
         
+    post_data = urllib.parse.urlencode(params).encode("utf-8")
+    sign = hmac.new(INDODAX_SECRET_KEY.encode('utf-8'), post_data, hashlib.sha512).hexdigest()
+    
+    headers = {
+        "Key": INDODAX_API_KEY,
+        "Sign": sign,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0"
+    }
+    
     try:
-        post_data = urllib.parse.urlencode(params).encode("utf-8")
-        sign = hmac.new(INDODAX_SECRET_KEY.encode('utf-8'), post_data, hashlib.sha512).hexdigest()
-        
-        headers = {
-            "Key": INDODAX_API_KEY,
-            "Sign": sign,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Mozilla/5.0"
-        }
-        
         req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        print(f"Indodax API Error ({method_name}):", e)
+        print(f"API Error ({method_name}):", e)
         return None
 
 def sync_real_wallet_balance():
@@ -125,7 +124,7 @@ def sync_real_wallet_balance():
                 
         print(f"Saldo Asli Disinkronkan. Total IDR: Rp {idr_total:,.2f}")
     else:
-        print("Gagal mengambil saldo asli (Cek API Key & Secret Key Anda).")
+        print("Gagal mengambil saldo asli.")
 
 def get_main_keyboard():
     return {
@@ -135,7 +134,6 @@ def get_main_keyboard():
     }
 
 def send_menu(chat_id, text):
-    if not chat_id: return None
     res = telegram("sendMessage", {
         "chat_id": str(chat_id),
         "text": text,
@@ -149,7 +147,6 @@ def send_menu(chat_id, text):
     return res
 
 def update_menu(chat_id, message_id, text):
-    if not chat_id or not message_id: return None
     if text == global_state["last_rendered_text"]: return {"ok": True}
     global_state["dashboard_chat_id"] = chat_id
     global_state["last_rendered_text"] = text
@@ -161,8 +158,7 @@ def update_menu(chat_id, message_id, text):
         "parse_mode": "Markdown",
         "reply_markup": get_main_keyboard()
     })
-    if not res or not res.get("ok"): 
-        send_menu(chat_id, text)
+    if not res or not res.get("ok"): send_menu(chat_id, text)
     return res
 
 def answer_callback(cb_id, text=None):
@@ -209,7 +205,7 @@ def update_all_initial_prices():
             time.sleep(0.3)
 
 # ==========================================
-# DASHBOARD BUILDER
+# INDODAX-STYLE DASHBOARD BUILDER
 # ==========================================
 def get_indodax_style_dashboard():
     total_combined_equity = 0.0
@@ -218,6 +214,7 @@ def get_indodax_style_dashboard():
     now_wib = get_wib_time()
     current_timestamp = time.time()
 
+    # Hitung total ekuitas terlebih dahulu untuk persentase aset
     for p in PAIRS:
         st = coins_state[p]
         price = st["last_market_price"]
@@ -227,6 +224,7 @@ def get_indodax_style_dashboard():
         total_wins += st["winning_trades"]
         total_losses += st["losing_trades"]
 
+    # Header ala Tampilan Saldo Indodax
     text_blocks = [
         f"📊 *INDODAX PORTFOLIO DASHBOARD* 📊\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -243,8 +241,11 @@ def get_indodax_style_dashboard():
         price = st["last_market_price"]
         asset_val = st["asset_balance"] * price
         equity = st["idr_balance"] + asset_val
+        
+        # Hitung persentase porsi aset terhadap total portofolio
         share_pct = (equity / total_combined_equity * 100) if total_combined_equity > 0 else 0.0
         
+        # Status Cooldown / Aktif / Stop
         if st["is_cooldown"]:
             remaining_cd = int(st["cooldown_until_time"] - current_timestamp)
             if remaining_cd > 0:
@@ -303,22 +304,19 @@ def auto_refresh_dashboard_loop():
     update_all_initial_prices()
     sync_real_wallet_balance()
 
-    print("Menunggu Anda mengirim pesan /start ke bot Telegram untuk menampilkan dashboard...")
-    while not global_state["dashboard_chat_id"]:
-        time.sleep(1)
-
-    send_menu(global_state["dashboard_chat_id"], get_indodax_style_dashboard())
+    if global_state["dashboard_chat_id"]:
+        send_menu(global_state["dashboard_chat_id"], get_indodax_style_dashboard())
 
     while True:
         try:
             if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
                 update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], get_indodax_style_dashboard())
-        except Exception as e:
-            print("Dashboard Refresh Error:", e)
-        time.sleep(2)
+        except Exception:
+            pass
+        time.sleep(1)
 
 # ==========================================
-# TRADING WORKER
+# TRADING WORKER DENGAN JEDA 5 MENIT JIKA LOSS
 # ==========================================
 def single_coin_trading_worker(pair):
     st = coins_state[pair]
@@ -351,6 +349,7 @@ def single_coin_trading_worker(pair):
                 now_wib = get_wib_time()
                 is_market_good = (st["price_trend"] == "🔺") or (len(st["chart_history"]) >= 3 and st["chart_history"][-1] == "▇")
 
+                # Kondisi ALL-IN BUY
                 if not st["in_position"] and st["idr_balance"] > 10000 and is_market_good:
                     indodax_private_request("trade", {
                         "pair": pair, "type": "buy",
@@ -366,6 +365,7 @@ def single_coin_trading_worker(pair):
                     st["logs"].append(f"[{now_wib}] ALL-IN BUY @ {current_price:,.0f}")
                     if len(st["logs"]) > 6: st["logs"].pop(0)
 
+                # Kondisi JUAL (Target 0.6% / Stop Loss -2%)
                 elif st["in_position"]:
                     if current_price > highest_price: highest_price = current_price
 
@@ -410,56 +410,35 @@ def single_coin_trading_worker(pair):
 # TELEGRAM HANDLERS
 # ==========================================
 def handle_update(update):
-    try:
-        if "callback_query" in update:
-            cb = update["callback_query"]
-            cb_id = cb["id"]
-            chat_id = cb["message"]["chat"]["id"]
-            msg_id = cb["message"]["message_id"]
-            data = cb.get("data", "")
+    if "callback_query" in update:
+        cb = update["callback_query"]
+        cb_id = cb["id"]
+        chat_id = cb["message"]["chat"]["id"]
+        msg_id = cb["message"]["message_id"]
+        data = cb.get("data", "")
 
-            if not global_state["dashboard_chat_id"]:
-                global_state["dashboard_chat_id"] = chat_id
+        if data == "btn_refresh":
+            sync_real_wallet_balance()
+            answer_callback(cb_id, "🔄 Saldo disinkronkan.")
+            update_menu(chat_id, msg_id, get_indodax_style_dashboard())
+        return
 
-            if data == "btn_refresh":
-                sync_real_wallet_balance()
-                answer_callback(cb_id, "🔄 Saldo disinkronkan.")
-                update_menu(chat_id, msg_id, get_indodax_style_dashboard())
-            return
-
-        if "message" in update:
-            msg = update["message"]
-            chat_id = msg.get("chat", {}).get("id")
-            text = (msg.get("text") or "").strip()
-            if not chat_id: return
-
-            if not global_state["dashboard_chat_id"]:
-                global_state["dashboard_chat_id"] = chat_id
-                print(f"Chat ID Berhasil Dikenali: {chat_id}")
-
-            # Jika Anda mengetik /id, bot akan membalas dengan nomor Chat ID Anda
-            if text.startswith("/id"):
-                telegram("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": f"🔑 **Telegram Chat ID Anda adalah:** `{chat_id}`",
-                    "parse_mode": "Markdown"
-                })
-                return
-
-            if text.startswith("/start") or text.startswith("/menu"):
-                send_menu(chat_id, get_indodax_style_dashboard())
-    except Exception as e:
-        print("Handler Error:", e)
+    if "message" in update:
+        msg = update["message"]
+        chat_id = msg.get("chat", {}).get("id")
+        text = (msg.get("text") or "").strip()
+        if chat_id and (text.startswith("/start") or text.startswith("/menu")):
+            send_menu(chat_id, get_indodax_style_dashboard())
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Telegram Polling Berjalan Aman...")
+    print("Telegram Polling dengan Dashboard ala Indodax dimulai...")
     while True:
         try:
             params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
             if offset is not None: params["offset"] = offset
-            res = telegram("getUpdates", params)
+            res = telegram("getUpdates",params)
             if res and res.get("ok"):
                 for upd in res.get("result", []):
                     offset = upd["update_id"] + 1
@@ -469,9 +448,6 @@ def polling():
             time.sleep(3)
 
 if __name__ == "__main__":
-    if not TOKEN or "MASUKKAN" in TOKEN:
-        print("PERINGATAN: TELEGRAM_BOT_TOKEN belum diatur dengan benar!")
-
     for p in PAIRS:
         threading.Thread(target=single_coin_trading_worker, args=(p,), daemon=True).start()
 
