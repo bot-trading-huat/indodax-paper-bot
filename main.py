@@ -437,7 +437,16 @@ def handle_update(update):
                 global_state["dashboard_chat_id"] = chat_id
                 print(f"Chat ID Berhasil Dikenali: {chat_id}")
 
-            if text.startswith("/start") or text.startswith("/menu") or text.startswith("/id"):
+            # Jika Anda mengetik /id, bot akan membalas dengan nomor Chat ID Anda
+            if text.startswith("/id"):
+                telegram("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": f"🔑 **Telegram Chat ID Anda adalah:** `{chat_id}`",
+                    "parse_mode": "Markdown"
+                })
+                return
+
+            if text.startswith("/start") or text.startswith("/menu"):
                 send_menu(chat_id, get_indodax_style_dashboard())
     except Exception as e:
         print("Handler Error:", e)
