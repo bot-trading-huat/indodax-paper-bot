@@ -92,17 +92,17 @@ def sync_real_wallet_balance():
     
     if res and res.get("success") == 1:
         ret = res.get("return", {})
-        balances = ret.get("balance", {}) 
-        funds = ret.get("funds", {})      
         
-        # Ambil saldo IDR utama
-        idr_total = float(balances.get("idr", balances.get("IDR", 0)))
+        # FIX UTAMA: Membaca saldo IDR dari struktur API Indodax yang benar (balance_idr)
+        idr_total = float(ret.get("balance_idr", ret.get("balance", {}).get("idr", 0)))
         wallet_main_state["idr_balance"] = idr_total
+        
+        coin_balances = ret.get("balance", {})
         
         total_coins_val = 0.0
         for p in PAIRS:
             base_coin = p.replace("idr", "")
-            coin_bal = float(funds.get(base_coin, funds.get(base_coin.upper(), 0)))
+            coin_bal = float(coin_balances.get(base_coin, coin_balances.get(base_coin.upper(), 0)))
             
             if coin_bal > 0:
                 coins_state[p]["asset_balance"] = coin_bal
@@ -114,14 +114,9 @@ def sync_real_wallet_balance():
             total_coins_val += coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]
         
         wallet_main_state["total_asset_equity"] = idr_total + total_coins_val
-        
-        # CETAK KE TERMINAL (DEBUG)
-        print("========================================")
-        print(f"[INDODAX LIVE SYNC] Saldo IDR Asli : Rp {idr_total:,.2f}")
-        print(f"[INDODAX LIVE SYNC] Total Estimasi Aset: Rp {wallet_main_state['total_asset_equity']:,.2f}")
-        print("========================================")
+        print(f"✅ SYNC BERHASIL | Saldo IDR: Rp {idr_total:,.2f} | Total Aset: Rp {wallet_main_state['total_asset_equity']:,.2f}")
     else:
-        print("[INDODAX LIVE SYNC] Gagal mengambil data dari API Indodax.")
+        print("❌ GAGAL SYNC SALDO DARI INDODAX!")
 
 def get_main_keyboard():
     return {
@@ -210,10 +205,10 @@ def get_indodax_style_dashboard():
     text_blocks = [
         f"📊 *INDODAX LIVE DASHBOARD* 📊\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 *Saldo IDR Utama:* *Rp {wallet_main_state['idr_balance']:,.2f}*\n"
-        f"💎 *Estimasi Total Aset:* *Rp {total_equity:,.2f}*\n"
+        f"💰 *Estimasi Total Aset:* *Rp {total_equity:,.2f}*\n"
+        f"💳 *Saldo IDR Utama:* *Rp {wallet_main_state['idr_balance']:,.2f}*\n"
         f"📈 *Statistik:* 🟢 {total_wins} Win | 🔴 {total_losses} Loss\n\n"
-        f"📦 *Rincian Pasar:* "
+        f"📦 *Rincian Pasar:*"
     ]
 
     for p in PAIRS:
@@ -227,17 +222,49 @@ def get_indodax_style_dashboard():
         text_blocks.append(
             f"\n🔹 *{pair_display}* [{st['price_trend']}]\n"
             f"   • Harga: Rp {price:,.2f}\n"
+            f"   • Nilai: Rp {asset_val:,.2f}\n"
+            f"   • Grafik: `{chart_vis}`\n"
             f"   • Posisi: {pos_str}"
         )
 
-    text_blocks.append(f"\n━━━━━━━━━━━━━━━━━━━\n⏱ *Live Sync:* `{now_wib} WIB`")
+    all_logs = [f"[{p.upper()}] {lg}" for p in PAIRS for lg in coins_state[p]["logs"][-1:]]
+    logs_str = "\n".join(all_logs) if all_logs else "Memantau market..."
+
+    text_blocks.append(f"\n📋 *LOG AKTIVITAS:*\n```{logs_str}```")
+    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n⏱ *Live Sync:* `{now_wib} WIB`")
+
     return "\n".join(text_blocks)
+
+def get_pl_report_text():
+    total_coins_val = sum(st["asset_balance"] * st["last_market_price"] for st in coins_state.values())
+    total_equity = wallet_main_state["idr_balance"] + total_coins_val
+    
+    total_wins = sum(st["winning_trades"] for st in coins_state.values())
+    total_losses = sum(st["losing_trades"] for st in coins_state.values())
+    total_profit = sum(st["total_profit_idr"] for st in coins_state.values())
+    total_loss = sum(st["total_loss_idr"] for st in coins_state.values())
+    net_pl = total_profit - total_loss
+    net_sign = "+" if net_pl >= 0 else ""
+
+    return (
+        f"💰 *LAPORAN SALDO & PROFIT/LOSS* 💰\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"• *Saldo IDR Utama:* Rp {wallet_main_state['idr_balance']:,.2f}\n"
+        f"• *Total Estimasi Aset:* Rp {total_equity:,.2f}\n"
+        f"• *Total Win:* {total_wins} Kali\n"
+        f"• *Total Loss:* {total_losses} Kali\n"
+        f"• *Akumulasi Profit:* +Rp {total_profit:,.2f}\n"
+        f"• *Akumulasi Loss:* -Rp {total_loss:,.2f}\n"
+        f"• *Net Result (P/L):* *{net_sign}Rp {net_pl:,.2f}*\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ _Waktu Cek: {get_wib_time()} WIB_"
+    )
 
 def background_market_worker():
     while True:
         for p in PAIRS:
             fetch_price(p)
-        sync_real_wallet_balance() # Sinkronisasi saldo berkala tiap siklus market
+        sync_real_wallet_balance()  # Update saldo berkala tiap siklus
         
         if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
             try:
@@ -260,8 +287,8 @@ def handle_update(update):
             update_menu(chat_id, msg_id, get_indodax_style_dashboard())
         elif data == "btn_check_pl":
             sync_real_wallet_balance()
-            answer_callback(cb_id, "Menampilkan Saldo Terbaru...")
-            send_message_with_keyboard(chat_id, f"💰 *SALDO TERKINI DI TELEGRAM*\n\n• Saldo IDR Utama: *Rp {wallet_main_state['idr_balance']:,.2f}*\n• Estimasi Total Aset: *Rp {wallet_main_state['total_asset_equity']:,.2f}*")
+            answer_callback(cb_id, "Menampilkan Laporan Saldo...")
+            send_message_with_keyboard(chat_id, get_pl_report_text())
         return
 
     if "message" in update:
@@ -275,12 +302,12 @@ def handle_update(update):
             send_menu(chat_id, get_indodax_style_dashboard())
         elif text.startswith("/saldo") or text.startswith("/pl"):
             sync_real_wallet_balance()
-            send_message_with_keyboard(chat_id, f"💰 *SALDO TERKINI DI TELEGRAM*\n\n• Saldo IDR Utama: *Rp {wallet_main_state['idr_balance']:,.2f}*\n• Estimasi Total Aset: *Rp {wallet_main_state['total_asset_equity']:,.2f}*")
+            send_message_with_keyboard(chat_id, get_pl_report_text())
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot Telegram Aktif & Sinkronisasi Real-Time Dimulai...")
+    print("Bot Telegram Aktif & Berjalan Sempurna...")
     while True:
         try:
             params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
