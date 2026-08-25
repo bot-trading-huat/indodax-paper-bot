@@ -27,13 +27,11 @@ INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271b
 active_dashboards = {}
 last_rendered_text = {}
 
-# Riwayat harga untuk membuat grafik sparkline (maksimal 8 titik data)
 price_history = {
-    "BTC": deque(maxlen=8),
-    "USDT": deque(maxlen=8)
+    "BTC": deque(maxlen=7),
+    "USDT": deque(maxlen=7)
 }
 
-# Menyimpan harga awal/sebelumnya untuk hitung perubahan
 prev_prices = {
     "BTC": None,
     "USDT": None
@@ -47,22 +45,30 @@ def telegram(method, params=None):
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
+    except Exception:
         return None
 
-def generate_sparkline(history):
+def generate_block_chart(history):
     if len(history) < 2:
-        return "───"
+        return "───🟦──────"
+    
     min_val = min(history)
     max_val = max(history)
-    if min_val == max_val:
-        return "───────"
+    current_val = history[-1]
     
-    chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    if min_val == max_val:
+        return "───🟦──────"
+    
+    ratio = (current_val - min_val) / (max_val - min_val)
+    pos = int(ratio * 9)
+    pos = max(0, min(9, pos))
+    
     line = ""
-    for v in history:
-        idx = int((v - min_val) / (max_val - min_val) * (len(chars) - 1))
-        line += chars[idx]
+    for i in range(10):
+        if i == pos:
+            line += "🟦"
+        else:
+            line += "─"
     return line
 
 def fetch_realtime_account():
@@ -82,26 +88,23 @@ def fetch_realtime_account():
             usdt_price = float(json.loads(resp.read().decode("utf-8")).get("ticker", {}).get("last", 0))
     except: pass
 
-    # Update histori harga & grafik
-    if btc_price > 0:
-        price_history["BTC"].append(btc_price)
-    if usdt_price > 0:
-        price_history["USDT"].append(usdt_price)
+    if btc_price > 0: price_history["BTC"].append(btc_price)
+    if usdt_price > 0: price_history["USDT"].append(usdt_price)
 
-    # Indikator Naik / Turun
-    btc_status = "⚪"
+    # Indikator Status (⏺ Stabil | 🔺 Naik | 🔻 Turun)
+    btc_status = "Aktif ⏺"
     if prev_prices["BTC"] is not None:
-        if btc_price > prev_prices["BTC"]: btc_status = "🟢 ▲"
-        elif btc_price < prev_prices["BTC"]: btc_status = "🔴 ▼"
+        if btc_price > prev_prices["BTC"]: btc_status = "Aktif 🔺"
+        elif btc_price < prev_prices["BTC"]: btc_status = "Aktif 🔻"
     if btc_price > 0: prev_prices["BTC"] = btc_price
 
-    usdt_status = "⚪"
+    usdt_status = "Aktif ⏺"
     if prev_prices["USDT"] is not None:
-        if usdt_price > prev_prices["USDT"]: usdt_status = "🟢 ▲"
-        elif usdt_price < prev_prices["USDT"]: usdt_status = "🔴 ▼"
+        if usdt_price > prev_prices["USDT"]: usdt_status = "Aktif 🔺"
+        elif usdt_price < prev_prices["USDT"]: usdt_status = "Aktif 🔻"
     if usdt_price > 0: prev_prices["USDT"] = usdt_price
 
-    # Ambil Saldo Private API
+    # Fetch Balance
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
     params = {"method": "getInfo", "nonce": nonce}
@@ -137,11 +140,11 @@ def fetch_realtime_account():
                     "btc": btc_amt,
                     "btc_val": btc_val,
                     "btc_status": btc_status,
-                    "btc_chart": generate_sparkline(price_history["BTC"]),
+                    "btc_chart": generate_block_chart(price_history["BTC"]),
                     "usdt": usdt_amt,
                     "usdt_val": usdt_val,
                     "usdt_status": usdt_status,
-                    "usdt_chart": generate_sparkline(price_history["USDT"]),
+                    "usdt_chart": generate_block_chart(price_history["USDT"]),
                     "grand_total": grand_total,
                     "btc_price": btc_price,
                     "usdt_price": usdt_price
@@ -158,25 +161,24 @@ def build_dashboard():
     if not success:
         return f"❌ *GAGAL KONEKSI:* `{err}`"
 
-    text = f"📊 *INDODAX LIVE DASHBOARD (BTC & USDT)*\n"
-    text += f"━━━━━━━━━━━━━━━━━━━\n"
-    text += f"💰 *Estimasi Total Aset:* *Rp {data['grand_total']:,.0f}*\n"
-    text += f"💳 *Saldo Cash IDR:* Rp {data['idr']:,.0f}\n\n"
-    
-    text += f"🔸 *BTC / IDR* {data['btc_status']}\n"
-    text += f"  • Harga Market: Rp {data['btc_price']:,.0f}\n"
-    text += f"  • Grafik Mini: `{data['btc_chart']}`\n"
-    text += f"  • Jumlah Dimiliki: `{data['btc']:.8f}` BTC\n"
-    text += f"  • Estimasi Nilai: Rp {data['btc_val']:,.0f}\n\n"
-    
-    text += f"🔹 *USDT / IDR* {data['usdt_status']}\n"
-    text += f"  • Harga Market: Rp {data['usdt_price']:,.0f}\n"
-    text += f"  • Grafik Mini: `{data['usdt_chart']}`\n"
-    text += f"  • Jumlah Dimiliki: `{data['usdt']:.4f}` USDT\n"
-    text += f"  • Estimasi Nilai: Rp {data['usdt_val']:,.0f}\n"
-
-    text += f"━━━━━━━━━━━━━━━━━━━\n"
-    text += f"⚡ *Realtime Sync:* `{now} WIB`"
+    text = (
+        f"📊 *INDODAX LIVE DASHBOARD* 📊\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 *Estimasi Total Aset:* Rp {data['grand_total']:,.0f}\n\n"
+        f"📦 *Rincian Pasar & Saldo (Real-Sync):*\n\n"
+        f"🔹 *BTC/IDR* {data['btc_status']}\n"
+        f"• Harga: Rp {data['btc_price']:,.0f}\n"
+        f"• Nilai: Rp {data['btc_val']:,.0f}\n"
+        f"• Grafik: `{data['btc_chart']}`\n"
+        f"• Posisi: Dimiliki ({data['btc']:.8f} BTC)\n\n"
+        f"🔹 *USDT/IDR* {data['usdt_status']}\n"
+        f"• Harga: Rp {data['usdt_price']:,.0f}\n"
+        f"• Nilai: Rp {data['usdt_val']:,.0f}\n"
+        f"• Grafik: `{data['usdt_chart']}`\n"
+        f"• Posisi: Dimiliki ({data['usdt']:.4f} USDT)\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ *Live Sync:* `{now} WIB`"
+    )
     return text
 
 def ultra_fast_update_loop():
@@ -190,7 +192,12 @@ def ultra_fast_update_loop():
                         "message_id": msg_id,
                         "text": new_text,
                         "parse_mode": "Markdown",
-                        "reply_markup": {"inline_keyboard": [[{"text": "⚡ Realtime Active (Auto Update)", "callback_data": "btn_refresh"}]]}
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [{"text": "🔄 Refresh Dashboard", "callback_data": "btn_refresh"}],
+                                [{"text": "💰 Cek Saldo & P/L", "callback_data": "btn_saldo"}]
+                            ]
+                        }
                     })
                     if res and res.get("ok"):
                         last_rendered_text[chat_id] = new_text
@@ -203,7 +210,7 @@ def polling():
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
     
     threading.Thread(target=ultra_fast_update_loop, daemon=True).start()
-    print("Bot Realtime (Grafik & Naik/Turun) Berjalan...")
+    print("Bot Realtime Dashboard Berjalan...")
     
     while True:
         try:
@@ -221,7 +228,7 @@ def polling():
                         msg_id = cb["message"]["message_id"]
                         active_dashboards[chat_id] = msg_id
                         
-                        telegram("answerCallbackQuery", {"callback_query_id": cb["id"], "text": "⚡ Syncing Realtime..."})
+                        telegram("answerCallbackQuery", {"callback_query_id": cb["id"], "text": "🔄 Refreshing..."})
 
                     elif "message" in upd:
                         chat_id = upd["message"]["chat"]["id"]
@@ -230,7 +237,12 @@ def polling():
                             "chat_id": str(chat_id),
                             "text": dash_text,
                             "parse_mode": "Markdown",
-                            "reply_markup": {"inline_keyboard": [[{"text": "⚡ Realtime Active (Auto Update)", "callback_data": "btn_refresh"}]]}
+                            "reply_markup": {
+                                "inline_keyboard": [
+                                    [{"text": "🔄 Refresh Dashboard", "callback_data": "btn_refresh"}],
+                                    [{"text": "💰 Cek Saldo & P/L", "callback_data": "btn_saldo"}]
+                                ]
+                            }
                         })
                         if resp and resp.get("ok"):
                             active_dashboards[chat_id] = resp["result"]["message_id"]
