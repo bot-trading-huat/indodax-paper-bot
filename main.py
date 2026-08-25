@@ -24,7 +24,6 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkeh
 INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK").strip()
 INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b").strip()
 PAIR = "btcidr"
-FEE_RATE = 0.0021
 
 state = {
     "is_running": False,
@@ -33,6 +32,10 @@ state = {
     "total_trades": 0,
     "winning_trades": 0,
     "losing_trades": 0,
+    
+    # Grafik & Tren sesuai keinginan
+    "last_market_price": 0.0,
+    "price_trend": "⏺",
     
     # Sesi per 1 menit
     "minute_start_equity": 0.0,
@@ -46,7 +49,7 @@ state = {
     "last_rendered_text": ""
 }
 
-price_history = deque(maxlen=10)
+chart_chars = deque(maxlen=10)
 
 def telegram(method, params=None):
     if not TOKEN: return None
@@ -67,41 +70,38 @@ def get_indodax_price():
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             price = float(data.get("ticker", {}).get("last", 0))
+            
             if price > 0:
-                price_history.append(price)
+                if state["last_market_price"] > 0:
+                    if price > state["last_market_price"]:
+                        state["price_trend"] = "🔺"
+                        char = "▇"
+                    elif price < state["last_market_price"]:
+                        state["price_trend"] = "🔻"
+                        char = "▂"
+                    else:
+                        state["price_trend"] = "⏺"
+                        char = "—"
+                else:
+                    char = "—"
+                    
+                chart_chars.append(char)
+                state["last_market_price"] = price
+                
             return price
     except Exception:
-        if price_history:
-            return price_history[-1]
+        if state["last_market_price"] > 0:
+            return state["last_market_price"]
         return 0.0
 
 def generate_block_chart():
-    if len(price_history) < 2:
-        return "───🟦──────"
-    
-    min_val = min(price_history)
-    max_val = max(price_history)
-    current_val = price_history[-1]
-    
-    if min_val == max_val:
-        return "───🟦──────"
-    
-    ratio = (current_val - min_val) / (max_val - min_val)
-    pos = int(ratio * 9)
-    pos = max(0, min(9, pos))
-    
-    line = ""
-    for i in range(10):
-        if i == pos:
-            line += "🟦"
-        else:
-            line += "─"
-    return line
+    if not chart_chars:
+        return "——————————"
+    return "".join(chart_chars)
 
 def fetch_realtime_account():
     price = get_indodax_price()
     
-    # Fetch Saldo Real Indodax via TAPI
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
     params = {"method": "getInfo", "nonce": nonce}
@@ -168,7 +168,7 @@ def get_home_text(is_final=False):
     if not success:
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
-    status_str = "Aktif ⏺" if state["is_running"] else "Berhenti ⏺"
+    status_str = f"Aktif {state['price_trend']}" if state["is_running"] else f"Berhenti {state['price_trend']}"
     now_wib = get_wib_time()
 
     pos_info = f"⚡ *Posisi:* Scalping (Holding {btc_amt:.6f} BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Persiapan Beli)"
@@ -185,7 +185,7 @@ def get_home_text(is_final=False):
         profit_str = f"Rp {profit_loss_minute:+,.2f}"
 
         return (
-            f"🤖 *BOT TRADING INDODAX (REAL)*\n\n"
+            f"🤖 *BOT TRADING INDODAX*\n\n"
             f"Status Bot: 🏁 *REKAP SESI (SELESAI)*\n"
             f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
@@ -199,7 +199,7 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🤖 *BOT TRADING INDODAX (REAL)*\n\n"
+        f"🤖 *BOT TRADING INDODAX*\n\n"
         f"Status Bot: {status_str}\n"
         f"💰 *Saldo Saat Ini:* Rp {total_equity:,.2f}\n"
         f"{pos_info}\n"
@@ -318,7 +318,6 @@ def trading_loop():
                 if success and current_price > 0:
                     # 1. KONDISI BELI (ENTRY)
                     if not state["in_position"] and idr_cash > 10000:
-                        # Gunakan seluruh saldo IDR (sisakan sedikit untuk toleransi fee jika diperlukan)
                         buy_idr = idr_cash * 0.995 
                         success_order, res_data = execute_real_order("buy", amount_idr=buy_idr)
                         
@@ -344,7 +343,6 @@ def trading_loop():
                         is_stop_loss = price_change_pct <= -0.02
 
                         if (is_profit_safe and is_trailing_triggered) or is_big_target or (is_profit_safe and drop_from_peak >= 0.002) or is_stop_loss:
-                            # Ambil update saldo btc terbaru untuk dijual
                             _, _, current_btc_amt, _, _, _ = fetch_realtime_account()
                             if current_btc_amt > 0.00001:
                                 success_order, res_data = execute_real_order("sell", amount_btc=current_btc_amt)
@@ -377,7 +375,7 @@ def trading_loop():
 # ==========================================
 def get_status_text():
     success, idr_bal, btc_amt, _, price, _ = fetch_realtime_account()
-    status_str = "Berjalan ⏺" if state["is_running"] else "Berhenti ⏺"
+    status_str = f"Berjalan {state['price_trend']}" if state["is_running"] else f"Berhenti {state['price_trend']}"
     pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else "Standby (Persiapan Beli)"
     return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/IDR\n• Harga BTC saat ini: Rp {price:,.0f}\n• Posisi: {pos}"
 
@@ -431,26 +429,30 @@ def handle_update(update):
             state["is_running"] = True
             success, _, _, total_equity, _, _ = fetch_realtime_account()
             state["minute_start_equity"] = total_equity if success else 0.0
-            answer_callback(cb_id, "▶️ Bot dijalankan (Real Akun).")
+            answer_callback(cb_id, "▶️ Bot dijalankan.")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
         elif data == "btn_stop":
             state["is_running"] = False
             answer_callback(cb_id, "⏹ Bot dihentikan.")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
-        else:
+        elif data == "btn_home":
             answer_callback(cb_id)
-
-        if data == "btn_home":
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
         elif data == "btn_status":
+            answer_callback(cb_id)
             update_menu(chat_id, msg_id, get_status_text(), is_home=False)
         elif data == "btn_balance":
+            answer_callback(cb_id)
             update_menu(chat_id, msg_id, get_balance_text(), is_home=False)
         elif data == "btn_report":
+            answer_callback(cb_id)
             update_menu(chat_id, msg_id, get_report_text(), is_home=False)
         elif data == "btn_price":
+            answer_callback(cb_id)
             price = get_indodax_price() or 0
             update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\nBTC/IDR: Rp {price:,.0f}", is_home=False)
+        else:
+            answer_callback(cb_id)
         return
 
     if "message" in update:
