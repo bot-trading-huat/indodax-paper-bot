@@ -32,7 +32,7 @@ coins_state = {}
 for p in PAIRS:
     coins_state[p] = {
         "is_running": True,
-        "idr_balance": 44500.0, # Nilai default sementara agar langsung tampil jika API lambat
+        "idr_balance": 44500.0,
         "asset_balance": 0.0,
         "in_position": False,
         "buy_price": 0.0,
@@ -194,7 +194,7 @@ def get_indodax_style_dashboard():
     logs_str = "\n".join(all_logs) if all_logs else "Memantau pergerakan market..."
 
     text_blocks.append(f"\n📋 *LOG AKTIVITAS:*\n```{logs_str}```")
-    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n⏱ *Live Sync:* `{now_wib} WIB` (Berjalan Tiap Detik)")
+    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n⏱ *Live Sync:* `{now_wib} WIB` (Auto Update)")
 
     return "\n".join(text_blocks)
 
@@ -203,13 +203,13 @@ def background_market_worker():
         for p in PAIRS:
             fetch_price(p)
         
-        # Update tampilan Telegram secara paksa setiap detik agar bergerak live
+        # Jeda 5 detik agar lolos dari Telegram Flood Control
         if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
             try:
                 update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], get_indodax_style_dashboard())
             except Exception:
                 pass
-        time.sleep(1)
+        time.sleep(5)
 
 def handle_update(update):
     if "callback_query" in update:
