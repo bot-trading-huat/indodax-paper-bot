@@ -17,6 +17,9 @@ WIB = timezone(timedelta(hours=7))
 def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
+def get_wib_datetime():
+    return datetime.now(WIB)
+
 # ==========================================
 # KONFIGURASI API & BOT
 # ==========================================
@@ -33,17 +36,15 @@ state = {
     "winning_trades": 0,
     "losing_trades": 0,
     
-    # Grafik & Tren sesuai keinginan
+    # Grafik & Tren
     "last_market_price": 0.0,
     "price_trend": "⏺",
-    
-    # Status Detail untuk Kotak Hitam
-    "current_activity": "Bot standby, menunggu tombol Start...",
     
     # Sesi per 1 menit
     "minute_start_equity": 0.0,
     "minute_wins": 0,
     "minute_losses": 0,
+    "minute_logs": deque(["Bot disiapkan, menunggu start..."], maxlen=8),
     
     # Dashboard Tracking
     "dashboard_chat_id": None,
@@ -64,41 +65,51 @@ def telegram(method, params=None):
     except Exception:
         return None
 
-def set_activity(text):
+def add_log(text):
     timestamp = get_wib_time()
-    state["current_activity"] = f"[{timestamp}] {text}"
+    log_line = f"[{timestamp}] {text}"
+    state["minute_logs"].append(log_line)
 
-def get_indodax_price():
+def get_indodax_prices():
+    """Mengambil harga BTC/IDR dan USDT/IDR sekaligus"""
+    prices = {"btc": 0.0, "usdt": 0.0}
     try:
         ts = int(time.time() * 1000)
-        url = f"https://indodax.com/api/ticker/{PAIR}?ts={ts}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        # Fetch BTC
+        url_btc = f"https://indodax.com/api/ticker/btcidr?ts={ts}"
+        req = urllib.request.Request(url_btc, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            price = float(data.get("ticker", {}).get("last", 0))
-            
-            if price > 0:
-                if state["last_market_price"] > 0:
-                    if price > state["last_market_price"]:
-                        state["price_trend"] = "🔺"
-                        char = "▇"
-                    elif price < state["last_market_price"]:
-                        state["price_trend"] = "🔻"
-                        char = "▂"
-                    else:
-                        state["price_trend"] = "⏺"
-                        char = "—"
+            prices["btc"] = float(data.get("ticker", {}).get("last", 0))
+
+        # Fetch USDT
+        url_usdt = f"https://indodax.com/api/ticker/usdtidr?ts={ts}"
+        req_u = urllib.request.Request(url_usdt, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_u, timeout=3) as resp_u:
+            data_u = json.loads(resp_u.read().decode("utf-8"))
+            prices["usdt"] = float(data_u.get("ticker", {}).get("last", 0))
+
+        price = prices["btc"]
+        if price > 0:
+            if state["last_market_price"] > 0:
+                if price > state["last_market_price"]:
+                    state["price_trend"] = "🔺"
+                    char = "▇"
+                elif price < state["last_market_price"]:
+                    state["price_trend"] = "🔻"
+                    char = "▂"
                 else:
+                    state["price_trend"] = "⏺"
                     char = "—"
-                    
-                chart_chars.append(char)
-                state["last_market_price"] = price
-                
-            return price
+            else:
+                char = "—"
+            chart_chars.append(char)
+            state["last_market_price"] = price
+
     except Exception:
         if state["last_market_price"] > 0:
-            return state["last_market_price"]
-        return 0.0
+            prices["btc"] = state["last_market_price"]
+    return prices
 
 def generate_block_chart():
     if not chart_chars:
@@ -106,7 +117,9 @@ def generate_block_chart():
     return "".join(chart_chars)
 
 def fetch_realtime_account():
-    price = get_indodax_price()
+    prices = get_indodax_prices()
+    btc_price = prices["btc"]
+    usdt_price = prices["usdt"]
     
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
@@ -129,19 +142,19 @@ def fetch_realtime_account():
                 balances = res.get("return", {}).get("balance", {})
                 balances_hold = res.get("return", {}).get("balance_hold", {})
                 
-                idr_cash = float(balances.get("idr", 0))
-                idr_hold = float(balances_hold.get("idr", 0))
-                total_idr = idr_cash + idr_hold
-                
+                idr_cash = float(balances.get("idr", 0)) + float(balances_hold.get("idr", 0))
                 btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
-                btc_val = btc_amt * price
-                grand_total = total_idr + btc_val
+                usdt_amt = float(balances.get("usdt", 0)) + float(balances_hold.get("usdt", 0))
                 
-                return True, idr_cash, btc_amt, grand_total, price, "OK"
+                btc_val = btc_amt * btc_price
+                usdt_val = usdt_amt * usdt_price if usdt_price > 0 else 0
+                grand_total = idr_cash + btc_val + usdt_val
+                
+                return True, idr_cash, btc_amt, usdt_amt, btc_val, usdt_val, grand_total, btc_price, "OK"
             else:
-                return False, 0.0, 0.0, 0.0, price, res.get("error", "API Error")
+                return False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, btc_price, res.get("error", "API Error")
     except Exception as e:
-        return False, 0.0, 0.0, 0.0, price, str(e)
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, btc_price, str(e)
 
 # ==========================================
 # KEYBOARDS
@@ -154,8 +167,9 @@ def get_main_keyboard():
     )
     return {
         "inline_keyboard": [
-            [play_stop_btn],
+            [play_stop_btn, {"text": "🔄 Refresh Manual", "callback_data": "btn_refresh"}],
             [{"text": "📊 Status Bot & Posisi", "callback_data": "btn_status"}],
+            [{"text": "💰 Cek Saldo (IDR, USDT, BTC)", "callback_data": "btn_balance"}],
             [{"text": "📈 Laporan PnL & WinRate", "callback_data": "btn_report"}],
             [{"text": "⚡ Cek Harga BTC Real-Time", "callback_data": "btn_price"}]
         ]
@@ -171,8 +185,8 @@ def get_back_keyboard():
 # ==========================================
 # DASHBOARD TEXT BUILDER
 # ==========================================
-def get_home_text(is_final=False):
-    success, idr_bal, btc_amt, total_equity, price, err = fetch_realtime_account()
+def get_home_text(is_final=False, is_daily_recap=False):
+    success, idr_bal, btc_amt, usdt_amt, btc_val, usdt_val, total_equity, price, err = fetch_realtime_account()
     if not success:
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
@@ -182,8 +196,27 @@ def get_home_text(is_final=False):
     pos_info = f"⚡ *Posisi:* Scalping (Holding {btc_amt:.6f} BTC)" if state["in_position"] else "💵 *Posisi:* Standby (Persiapan Beli)"
     chart_str = generate_block_chart()
 
-    # Kotak Hitam menampilkan aktivitas bot secara langsung
-    block_text = f"```\n{state['current_activity']}\nPair : {PAIR.upper()} (Harga: Rp {price:,.0f})\nStatus: {'SEDANG MAIN/SCAN MARKET' if state['is_running'] else 'BERHENTI'}\n```"
+    if state["minute_logs"]:
+        logs_str = "\n".join(state["minute_logs"])
+        block_text = f"```\n{logs_str}\n```"
+    else:
+        block_text = "```\nMemantau pergerakan market...\n```"
+
+    total_wins = state["winning_trades"]
+    total_losses = state["losing_trades"]
+    stats_line = f"📈 *Statistik:* 🟢 {total_wins} Win | 🔴 {total_losses} Loss"
+
+    if is_daily_recap:
+        return (
+            f"🌙 *REKAP HARIAN OTOMATIS (00:00 WIB)*\n\n"
+            f"💰 *Total Aset Keseluruhan:* Rp {total_equity:,.2f}\n"
+            f"• IDR Tunai: Rp {idr_bal:,.2f}\n"
+            f"• USDT: {usdt_amt:,.4f} USDT (Rp {usdt_val:,.2f})\n"
+            f"• BTC: {btc_amt:.8f} BTC (Rp {btc_val:,.2f})\n\n"
+            f"{stats_line}\n"
+            f"⏱ _Waktu Rekap: {now_wib} WIB_\n\n"
+            f"📋 *RIWAYAT TRANSAKSI HARI INI:*\n{block_text}"
+        )
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
@@ -192,11 +225,12 @@ def get_home_text(is_final=False):
         return (
             f"🤖 *BOT TRADING INDODAX*\n\n"
             f"Status Bot: 🏁 *REKAP SESI (SELESAI)*\n"
-            f"💰 *Total Aset:* Rp {total_equity:,.2f} *(IDR Tunai: Rp {idr_bal:,.0f})*\n"
+            f"💰 *Saldo Akhir:* Rp {total_equity:,.2f}\n"
             f"{pos_info}\n"
             f"📈 Grafik: `{chart_str}`\n"
+            f"{stats_line}\n"
             f"⏱ _Waktu Selesai: {now_wib} WIB_\n\n"
-            f"🎯 *STATUS BOT MAIN:*\n{block_text}\n\n"
+            f"📋 *RIWAYAT TRANSAKSI SESI INI:*\n{block_text}\n\n"
             f"📊 *RINGKASAN SESI:*\n"
             f"• Profit: {state['minute_wins']}x\n"
             f"• Loss: {state['minute_losses']}x\n"
@@ -206,16 +240,17 @@ def get_home_text(is_final=False):
     return (
         f"🤖 *BOT TRADING INDODAX*\n\n"
         f"Status Bot: {status_str}\n"
-        f"💰 *Total Aset:* Rp {total_equity:,.2f} *(IDR Tunai: Rp {idr_bal:,.0f})*\n"
+        f"💰 *Total Aset:* Rp {total_equity:,.2f} (IDR: Rp {idr_bal:,.0f} | USDT: {usdt_amt:,.2f} | BTC: {btc_amt:.4f})\n"
         f"{pos_info}\n"
         f"📈 Grafik: `{chart_str}`\n"
+        f"{stats_line}\n"
         f"⏱ _Live Update: {now_wib} WIB_\n\n"
-        f"🎯 *STATUS BOT MAIN:*\n{block_text}\n\n"
+        f"📋 *RIWAYAT TRANSAKSI (SESI INI):*\n{block_text}\n\n"
         f"Pilih menu di bawah untuk mengelola bot:"
     )
 
 # ==========================================
-# AUTO-REFRESH LIVE DASHBOARD
+# AUTO-REFRESH & REKAP LOOPS
 # ==========================================
 def auto_refresh_dashboard_loop():
     while True:
@@ -236,9 +271,26 @@ def auto_refresh_dashboard_loop():
             print("Auto Refresh Error:", e)
         time.sleep(1.5)
 
-# ==========================================
-# PERGANTIAN SESI CHAT PER 1 MENIT
-# ==========================================
+def daily_reset_loop():
+    """Mengirim rekap harian otomatis setiap jam 00:00 WIB"""
+    while True:
+        now = get_wib_datetime()
+        # Hitung detik menuju pukul 00:00 berikutnya
+        target = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sleep_seconds = (target - now).total_seconds()
+        time.sleep(sleep_seconds)
+        
+        try:
+            if state["dashboard_chat_id"]:
+                recap_text = get_home_text(is_daily_recap=True)
+                telegram("sendMessage", {
+                    "chat_id": str(state["dashboard_chat_id"]),
+                    "text": recap_text,
+                    "parse_mode": "Markdown"
+                })
+        except Exception as e:
+            print("DAILY RESET ERROR:", e)
+
 def minutely_reset_loop():
     while True:
         time.sleep(60)
@@ -256,10 +308,12 @@ def minutely_reset_loop():
                     "parse_mode": "Markdown"
                 })
 
-                success, _, _, total_equity, _, _ = fetch_realtime_account()
+                success, _, _, _, _, _, total_equity, _, _ = fetch_realtime_account()
                 state["minute_start_equity"] = total_equity if success else 0.0
                 state["minute_wins"] = 0
                 state["minute_losses"] = 0
+                state["minute_logs"].clear()
+                add_log("Sesi baru dimulai.")
 
                 new_home_text = get_home_text()
                 resp = telegram("sendMessage", {
@@ -316,25 +370,26 @@ def trading_loop():
     while True:
         try:
             if state["is_running"]:
-                success, idr_cash, btc_amt, total_equity, current_price, err = fetch_realtime_account()
+                success, idr_cash, btc_amt, usdt_amt, btc_val, usdt_val, total_equity, current_price, err = fetch_realtime_account()
 
                 if success and current_price > 0:
                     # 1. KONDISI BELI (ENTRY)
                     if not state["in_position"]:
-                        if idr_cash >= 10000:
+                        if idr_cash > 50000:
                             buy_idr = idr_cash * 0.995 
-                            set_activity(f"Mencoba BUY BTC di pasar {PAIR.upper()} dg Rp {buy_idr:,.0f}...")
+                            add_log(f"Mencoba BUY BTC dg Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order("buy", amount_idr=buy_idr)
                             
                             if success_order:
                                 state["buy_price"] = current_price
                                 highest_price = current_price
                                 state["in_position"] = True
-                                set_activity(f"BERHASIL BUY di {PAIR.upper()} @ Rp {current_price:,.0f}")
+                                add_log(f"BUY BERHASIL @ Rp {current_price:,.0f}")
                             else:
-                                set_activity(f"Gagal BUY: {res_data}")
+                                add_log(f"Gagal BUY: {res_data}")
                         else:
-                            set_activity(f"Scan Market {PAIR.upper()} | Saldo IDR Tunai: Rp {idr_cash:,.0f} (<10k)")
+                            if not any("Saldo IDR < Min Order" in log for log in state["minute_logs"]):
+                                add_log(f"Peringatan: Saldo IDR Tunai kurang (Rp {idr_cash:,.0f}).")
 
                     # 2. KONDISI KELOLA POSISI (SELL)
                     elif state["in_position"]:
@@ -349,12 +404,10 @@ def trading_loop():
                         is_big_target = price_change_pct >= 0.03
                         is_stop_loss = price_change_pct <= -0.02
 
-                        set_activity(f"Memegang Posisi BUY | Beli: {state['buy_price']:,.0f} | Skr: {current_price:,.0f} ({price_change_pct*100:+.2f}%)")
-
                         if (is_profit_safe and is_trailing_triggered) or is_big_target or (is_profit_safe and drop_from_peak >= 0.002) or is_stop_loss:
-                            _, _, current_btc_amt, _, _, _ = fetch_realtime_account()
+                            _, _, current_btc_amt, _, _, _, _, _, _ = fetch_realtime_account()
                             if current_btc_amt > 0.00001:
-                                set_activity(f"Mencoba SELL {current_btc_amt:.6f} BTC di {PAIR.upper()}...")
+                                add_log(f"Mencoba SELL {current_btc_amt:.6f} BTC...")
                                 success_order, res_data = execute_real_order("sell", amount_btc=current_btc_amt)
                                 
                                 if success_order:
@@ -366,13 +419,13 @@ def trading_loop():
                                     if pnl_idr > 0:
                                         state["winning_trades"] += 1
                                         state["minute_wins"] += 1
-                                        set_activity(f"SELL PROFIT 🔺 @ Rp {current_price:,.0f} (+Rp {pnl_idr:,.0f})")
+                                        add_log(f"SELL PROFIT 🔺 @ Rp {current_price:,.0f} (+Rp {pnl_idr:,.0f})")
                                     else:
                                         state["losing_trades"] += 1
                                         state["minute_losses"] += 1
-                                        set_activity(f"SELL LOSS 🔻 @ Rp {current_price:,.0f} (-Rp {abs(pnl_idr):,.0f})")
+                                        add_log(f"SELL LOSS 🔻 @ Rp {current_price:,.0f} (-Rp {abs(pnl_idr):,.0f})")
                                 else:
-                                    set_activity(f"Gagal SELL: {res_data}")
+                                    add_log(f"Gagal SELL: {res_data}")
 
         except Exception as e:
             print("ENGINE ERROR:", e)
@@ -383,19 +436,29 @@ def trading_loop():
 # TELEGRAM HANDLER
 # ==========================================
 def get_status_text():
-    success, idr_bal, btc_amt, _, price, _ = fetch_realtime_account()
+    success, idr_bal, btc_amt, usdt_amt, _, _, _, price, _ = fetch_realtime_account()
     status_str = f"Berjalan {state['price_trend']}" if state["is_running"] else f"Berhenti {state['price_trend']}"
     pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else "Standby (Persiapan Beli)"
-    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/IDR\n• Harga BTC saat ini: Rp {price:,.0f}\n• IDR Tunai: Rp {idr_bal:,.2f}\n• Posisi: {pos}"
+    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/IDR\n• Harga BTC saat ini: Rp {price:,.0f}\n• Posisi: {pos}\n• Statistik: 🟢 {state['winning_trades']} Win | 🔴 {state['losing_trades']} Loss"
 
 def get_balance_text():
-    success, idr_bal, btc_amt, equity, price, _ = fetch_realtime_account()
-    asset_val = btc_amt * price
-    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Equity: Rp {equity:,.2f}"
+    success, idr_bal, btc_amt, usdt_amt, btc_val, usdt_val, equity, price, _ = fetch_realtime_account()
+    return (
+        f"💰 *SALDO & ASET AKUN INDODAX*\n\n"
+        f"• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n"
+        f"• Saldo USDT: {usdt_amt:,.4f} USDT (Rp {usdt_val:,.2f})\n"
+        f"• Saldo BTC: {btc_amt:.8f} BTC (Rp {btc_val:,.2f})\n\n"
+        f"💵 *Total Equity Keseluruhan:* Rp {equity:,.2f}"
+    )
 
 def get_report_text():
-    success, _, _, equity, price, _ = fetch_realtime_account()
-    return f"📈 *LAPORAN PERFORMA*\n\n• Total Equity: Rp {equity:,.2f}\n• Total Trade: {state['total_trades']}x\n• Win/Loss: {state['winning_trades']} Win / {state['losing_trades']} Loss"
+    success, _, _, _, _, _, equity, price, _ = fetch_realtime_account()
+    return (
+        f"📈 *LAPORAN PERFORMA & STATISTIK*\n\n"
+        f"• Total Equity: Rp {equity:,.2f}\n"
+        f"• Total Trade: {state['total_trades']}x\n"
+        f"• Statistik: 🟢 {state['winning_trades']} Win | 🔴 {state['losing_trades']} Loss"
+    )
 
 def answer_callback(cb_id, text=""):
     telegram("answerCallbackQuery", {"callback_query_id": cb_id, "text": text, "show_alert": False})
@@ -436,15 +499,18 @@ def handle_update(update):
 
         if data == "btn_start":
             state["is_running"] = True
-            success, _, _, total_equity, _, _ = fetch_realtime_account()
+            success, _, _, _, _, _, total_equity, _, _ = fetch_realtime_account()
             state["minute_start_equity"] = total_equity if success else 0.0
-            set_activity("Bot diaktifkan, mulai scan market...")
+            add_log("Bot diaktifkan user.")
             answer_callback(cb_id, "▶️ Bot dijalankan.")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
         elif data == "btn_stop":
             state["is_running"] = False
-            set_activity("Bot dihentikan oleh user.")
+            add_log("Bot dihentikan user.")
             answer_callback(cb_id, "⏹ Bot dihentikan.")
+            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+        elif data == "btn_refresh":
+            answer_callback(cb_id, "🔄 Dashboard direfresh.")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
         elif data == "btn_home":
             answer_callback(cb_id)
@@ -460,8 +526,8 @@ def handle_update(update):
             update_menu(chat_id, msg_id, get_report_text(), is_home=False)
         elif data == "btn_price":
             answer_callback(cb_id)
-            price = get_indodax_price() or 0
-            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\nBTC/IDR: Rp {price:,.0f}", is_home=False)
+            prices = get_indodax_prices()
+            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\n• BTC/IDR: Rp {prices['btc']:,.0f}\n• USDT/IDR: Rp {prices['usdt']:,.0f}", is_home=False)
         else:
             answer_callback(cb_id)
         return
@@ -496,4 +562,5 @@ if __name__ == "__main__":
     threading.Thread(target=trading_loop, daemon=True).start()
     threading.Thread(target=minutely_reset_loop, daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
+    threading.Thread(target=daily_reset_loop, daemon=True).start()
     polling()
