@@ -16,6 +16,9 @@ WIB = timezone(timedelta(hours=7))
 def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
+def get_wib_datetime():
+    return datetime.now(WIB)
+
 # ==========================================
 # CONFIGURATION
 # ==========================================
@@ -38,6 +41,8 @@ for p in PAIRS:
         "buy_price": 0.0,
         "winning_trades": 0,
         "losing_trades": 0,
+        "total_profit_idr": 0.0,
+        "total_loss_idr": 0.0,
         "logs": ["Bot diinisialisasi & berjalan aktif."],
         "last_market_price": 0.0,
         "price_trend": "⏺",
@@ -100,7 +105,10 @@ def sync_real_wallet_balance():
 def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "🔄 Refresh Dashboard", "callback_data": "btn_refresh"}]
+            [
+                {"text": "🔄 Refresh Dashboard", "callback_data": "btn_refresh"},
+                {"text": "💰 Cek Saldo & P/L", "callback_data": "btn_check_pl"}
+            ]
         ]
     }
 
@@ -163,12 +171,15 @@ def fetch_price(pair):
 
 def get_indodax_style_dashboard():
     total_equity = sum(st["idr_balance"] + (st["asset_balance"] * st["last_market_price"]) for st in coins_state.values())
+    total_wins = sum(st["winning_trades"] for st in coins_state.values())
+    total_losses = sum(st["losing_trades"] for st in coins_state.values())
     now_wib = get_wib_time()
 
     text_blocks = [
         f"📊 *INDODAX LIVE DASHBOARD* 📊\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 *Estimasi Total Aset:* *Rp {total_equity:,.2f}*\n\n"
+        f"💰 *Estimasi Total Aset:* *Rp {total_equity:,.2f}*\n"
+        f"📈 *Statistik:* 🟢 {total_wins} Win | 🔴 {total_losses} Loss\n\n"
         f"📦 *Rincian Pasar & Saldo:*"
     ]
 
@@ -176,7 +187,6 @@ def get_indodax_style_dashboard():
         st = coins_state[p]
         price = st["last_market_price"]
         asset_val = st["asset_balance"] * price
-        equity = st["idr_balance"] + asset_val
         pair_display = p.upper().replace("IDR", "/IDR")
         
         pos_str = f"Hold ({st['asset_balance']:,.4f})" if st["in_position"] else f"IDR Ready (Rp {st['idr_balance']:,.0f})"
@@ -198,18 +208,78 @@ def get_indodax_style_dashboard():
 
     return "\n".join(text_blocks)
 
+def get_pl_report_text():
+    total_equity = sum(st["idr_balance"] + (st["asset_balance"] * st["last_market_price"]) for st in coins_state.values())
+    total_wins = sum(st["winning_trades"] for st in coins_state.values())
+    total_losses = sum(st["losing_trades"] for st in coins_state.values())
+    total_profit = sum(st["total_profit_idr"] for st in coins_state.values())
+    total_loss = sum(st["total_loss_idr"] for st in coins_state.values())
+    net_pl = total_profit - total_loss
+
+    net_sign = "+" if net_pl >= 0 else ""
+
+    text = (
+        f"💰 *LAPORAN SALDO & PROFIT/LOSS* 💰\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"• *Total Estimasi Saldo/Aset:* Rp {total_equity:,.2f}\n"
+        f"• *Total Win:* {total_wins} Kali\n"
+        f"• *Total Loss:* {total_losses} Kali\n"
+        f"• *Akumulasi Profit:* +Rp {total_profit:,.2f}\n"
+        f"• *Akumulasi Loss:* -Rp {total_loss:,.2f}\n"
+        f"• *Net Result (P/L):* *{net_sign}Rp {net_pl:,.2f}*\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ _Waktu Cek: {get_wib_time()} WIB_"
+    )
+    return text
+
 def background_market_worker():
     while True:
         for p in PAIRS:
             fetch_price(p)
         
-        # Jeda 5 detik agar lolos dari Telegram Flood Control
         if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
             try:
                 update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], get_indodax_style_dashboard())
             except Exception:
                 pass
         time.sleep(5)
+
+def hourly_report_worker():
+    """Mengirimkan laporan status/saldo otomatis setiap 1 menit sekali ke chat Telegram."""
+    while True:
+        time.sleep(60) # Jeda persis 1 menit
+        if global_state["dashboard_chat_id"]:
+            try:
+                report = "⏰ *LAPORAN BERKALA (Setiap 1 Menit)* ⏰\n\n" + get_pl_report_text()
+                telegram("sendMessage", {
+                    "chat_id": str(global_state["dashboard_chat_id"]),
+                    "text": report,
+                    "parse_mode": "Markdown"
+                })
+            except Exception as e:
+                print("Error kirim laporan 1 menit:", e)
+
+def daily_reset_worker():
+    """Worker rekap harian jam 00:00 WIB."""
+    while True:
+        now = get_wib_datetime()
+        if now.hour == 0 and now.minute == 0 and now.second <= 5:
+            if global_state["dashboard_chat_id"]:
+                report = "🌙 *REKAP HARIAN OTOMATIS (00:00 WIB)* 🌙\n\n" + get_pl_report_text()
+                telegram("sendMessage", {
+                    "chat_id": str(global_state["dashboard_chat_id"]),
+                    "text": report,
+                    "parse_mode": "Markdown"
+                })
+                
+                for p in PAIRS:
+                    coins_state[p]["winning_trades"] = 0
+                    coins_state[p]["losing_trades"] = 0
+                    coins_state[p]["total_profit_idr"] = 0.0
+                    coins_state[p]["total_loss_idr"] = 0.0
+            
+            time.sleep(70)
+        time.sleep(1)
 
 def handle_update(update):
     if "callback_query" in update:
@@ -223,6 +293,13 @@ def handle_update(update):
             sync_real_wallet_balance()
             answer_callback(cb_id, "🔄 Disinkronkan ulang.")
             update_menu(chat_id, msg_id, get_indodax_style_dashboard())
+        elif data == "btn_check_pl":
+            answer_callback(cb_id, "Menampilkan Laporan Saldo & P/L...")
+            telegram("sendMessage", {
+                "chat_id": str(chat_id),
+                "text": get_pl_report_text(),
+                "parse_mode": "Markdown"
+            })
         return
 
     if "message" in update:
@@ -233,11 +310,17 @@ def handle_update(update):
 
         if text.startswith("/start") or text.startswith("/menu"):
             send_menu(chat_id, get_indodax_style_dashboard())
+        elif text.startswith("/saldo") or text.startswith("/pl"):
+            telegram("sendMessage", {
+                "chat_id": str(chat_id),
+                "text": get_pl_report_text(),
+                "parse_mode": "Markdown"
+            })
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot Telegram Live Berjalan...")
+    print("Bot Telegram Berjalan dengan Laporan Berkala 1 Menit & Reset 00:00 WIB...")
     while True:
         try:
             params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
@@ -257,4 +340,6 @@ if __name__ == "__main__":
         threading.Thread(target=fetch_price, args=(p,), daemon=True).start()
 
     threading.Thread(target=background_market_worker, daemon=True).start()
+    threading.Thread(target=hourly_report_worker, daemon=True).start()
+    threading.Thread(target=daily_reset_worker, daemon=True).start()
     polling()
