@@ -7,6 +7,7 @@ import hmac
 import hashlib
 import threading
 from datetime import datetime, timezone, timedelta
+from collections import deque
 
 import sys
 sys.stdout.reconfigure(line_buffering=True)
@@ -26,6 +27,18 @@ INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271b
 active_dashboards = {}
 last_rendered_text = {}
 
+# Riwayat harga untuk membuat grafik sparkline (maksimal 8 titik data)
+price_history = {
+    "BTC": deque(maxlen=8),
+    "USDT": deque(maxlen=8)
+}
+
+# Menyimpan harga awal/sebelumnya untuk hitung perubahan
+prev_prices = {
+    "BTC": None,
+    "USDT": None
+}
+
 def telegram(method, params=None):
     if not TOKEN: return None
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
@@ -37,11 +50,25 @@ def telegram(method, params=None):
     except Exception as e:
         return None
 
+def generate_sparkline(history):
+    if len(history) < 2:
+        return "───"
+    min_val = min(history)
+    max_val = max(history)
+    if min_val == max_val:
+        return "───────"
+    
+    chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    line = ""
+    for v in history:
+        idx = int((v - min_val) / (max_val - min_val) * (len(chars) - 1))
+        line += chars[idx]
+    return line
+
 def fetch_realtime_account():
     btc_price = 0.0
     usdt_price = 0.0
     
-    # 1. Ticker Realtime tanpa cache (ts timestamp milidetik)
     ts = int(time.time() * 1000)
     try:
         req = urllib.request.Request(f"https://indodax.com/api/ticker/btcidr?ts={ts}", headers={'User-Agent': 'Mozilla/5.0'})
@@ -55,7 +82,26 @@ def fetch_realtime_account():
             usdt_price = float(json.loads(resp.read().decode("utf-8")).get("ticker", {}).get("last", 0))
     except: pass
 
-    # 2. Ambil Saldo Private API
+    # Update histori harga & grafik
+    if btc_price > 0:
+        price_history["BTC"].append(btc_price)
+    if usdt_price > 0:
+        price_history["USDT"].append(usdt_price)
+
+    # Indikator Naik / Turun
+    btc_status = "⚪"
+    if prev_prices["BTC"] is not None:
+        if btc_price > prev_prices["BTC"]: btc_status = "🟢 ▲"
+        elif btc_price < prev_prices["BTC"]: btc_status = "🔴 ▼"
+    if btc_price > 0: prev_prices["BTC"] = btc_price
+
+    usdt_status = "⚪"
+    if prev_prices["USDT"] is not None:
+        if usdt_price > prev_prices["USDT"]: usdt_status = "🟢 ▲"
+        elif usdt_price < prev_prices["USDT"]: usdt_status = "🔴 ▼"
+    if usdt_price > 0: prev_prices["USDT"] = usdt_price
+
+    # Ambil Saldo Private API
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
     params = {"method": "getInfo", "nonce": nonce}
@@ -90,8 +136,12 @@ def fetch_realtime_account():
                     "idr": idr_cash,
                     "btc": btc_amt,
                     "btc_val": btc_val,
+                    "btc_status": btc_status,
+                    "btc_chart": generate_sparkline(price_history["BTC"]),
                     "usdt": usdt_amt,
                     "usdt_val": usdt_val,
+                    "usdt_status": usdt_status,
+                    "usdt_chart": generate_sparkline(price_history["USDT"]),
                     "grand_total": grand_total,
                     "btc_price": btc_price,
                     "usdt_price": usdt_price
@@ -113,13 +163,15 @@ def build_dashboard():
     text += f"💰 *Estimasi Total Aset:* *Rp {data['grand_total']:,.0f}*\n"
     text += f"💳 *Saldo Cash IDR:* Rp {data['idr']:,.0f}\n\n"
     
-    text += f"🔸 *BTC / IDR*\n"
+    text += f"🔸 *BTC / IDR* {data['btc_status']}\n"
     text += f"  • Harga Market: Rp {data['btc_price']:,.0f}\n"
+    text += f"  • Grafik Mini: `{data['btc_chart']}`\n"
     text += f"  • Jumlah Dimiliki: `{data['btc']:.8f}` BTC\n"
     text += f"  • Estimasi Nilai: Rp {data['btc_val']:,.0f}\n\n"
     
-    text += f"🔹 *USDT / IDR*\n"
+    text += f"🔹 *USDT / IDR* {data['usdt_status']}\n"
     text += f"  • Harga Market: Rp {data['usdt_price']:,.0f}\n"
+    text += f"  • Grafik Mini: `{data['usdt_chart']}`\n"
     text += f"  • Jumlah Dimiliki: `{data['usdt']:.4f}` USDT\n"
     text += f"  • Estimasi Nilai: Rp {data['usdt_val']:,.0f}\n"
 
@@ -127,13 +179,11 @@ def build_dashboard():
     text += f"⚡ *Realtime Sync:* `{now} WIB`"
     return text
 
-# Loop Background Super Cepat (Update 1-2 Detik)
 def ultra_fast_update_loop():
     while True:
         try:
             new_text = build_dashboard()
             for chat_id, msg_id in list(active_dashboards.items()):
-                # Hanya kirim jika teks/harga berubah untuk menghindari spamming telegram
                 if last_rendered_text.get(chat_id) != new_text:
                     res = telegram("editMessageText", {
                         "chat_id": str(chat_id),
@@ -146,14 +196,14 @@ def ultra_fast_update_loop():
                         last_rendered_text[chat_id] = new_text
         except Exception:
             pass
-        time.sleep(1.5) # Interval tercepat yang aman dari limit Telegram API
+        time.sleep(1.5)
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
     
     threading.Thread(target=ultra_fast_update_loop, daemon=True).start()
-    print("Bot Realtime Ultra Fast Sync Berjalan...")
+    print("Bot Realtime (Grafik & Naik/Turun) Berjalan...")
     
     while True:
         try:
