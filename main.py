@@ -210,7 +210,11 @@ def get_home_text(is_final=False):
         f"• Harga: Rp {price:,.2f}\n"
         f"• Nilai: Rp {btc_amt * price:,.2f}\n"
         f"• Grafik: `{chart_str}`\n"
-        f"{pos_info}"
+        f"{pos_info}\n\n"
+        f"📊 *REKAP PERFORMA SEMENTARA:*\n"
+        f"• Total Trade: {state['total_trades']}x\n"
+        f"• Win: {state['winning_trades']} | Loss: {state['losing_trades']}\n\n"
+        f"📋 *LOG AKTIVITAS:*\n{block_text}"
     )
 
 # ==========================================
