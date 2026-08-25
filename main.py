@@ -25,17 +25,22 @@ def get_wib_datetime():
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8026634236")
 
-INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK")
-INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b")
+INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "JCHAJJYO-GERKVM4O-2IJLK5QY-2KO7MPFL-UOJTQD5S")
+INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "6eecb43aefbf4796227bc664286d9a8c802698da9c316a1decef6f59ca9c5c5a6030cf3406cb6377")
 
 FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
 PAIRS = ["solidr", "usdtidr"]
+
+# Global variable untuk menyimpan saldo utama asli dari Indodax
+wallet_main_state = {
+    "idr_balance": 0.0,
+    "total_asset_equity": 0.0
+}
 
 coins_state = {}
 for p in PAIRS:
     coins_state[p] = {
         "is_running": True,
-        "idr_balance": 0.0,
         "asset_balance": 0.0,
         "in_position": False,
         "buy_price": 0.0,
@@ -97,25 +102,23 @@ def indodax_private_request(method_name, extra_params=None):
         return None
 
 def sync_real_wallet_balance():
-    """Mengambil saldo IDR dan koin langsung dari akun Indodax pengguna"""
+    """Mengambil saldo utama IDR dan aset koin langsung dari akun Indodax"""
     res = indodax_private_request("getInfo")
-    print("DEBUG RESPON INDODAX:", res) # Cek output ini di terminal/console Anda
+    print("DEBUG RESPON INDODAX:", res)
     
     if res and res.get("success") == 1:
         ret = res.get("return", {})
-        balances = ret.get("balance", {}) # Saldo IDR
-        funds = ret.get("funds", {})      # Saldo Aset Koin (sol, usdt, dll)
+        balances = ret.get("balance", {}) # Saldo IDR utama
+        funds = ret.get("funds", {})      # Saldo koin
         
-        # Ambil total saldo IDR asli
+        # Ambil total saldo IDR utama (misal: 88,982)
         idr_total = float(balances.get("idr", 0))
-        share_idr = idr_total / len(PAIRS) if len(PAIRS) > 0 else idr_total
+        wallet_main_state["idr_balance"] = idr_total
         
+        total_coins_val = 0.0
         for p in PAIRS:
-            coins_state[p]["idr_balance"] = share_idr
-            
-            # Cek saldo koin spesifik (misal: sol, usdt) di dompet asli
-            base_coin = p.replace("idr", "") # 'solidr' -> 'sol', 'usdtidr' -> 'usdt'
-            coin_bal = float(funds.get(base_coin, balances.get(base_coin, 0)))
+            base_coin = p.replace("idr", "") # 'sol' atau 'usdt'
+            coin_bal = float(funds.get(base_coin, 0))
             
             if coin_bal > 0:
                 coins_state[p]["asset_balance"] = coin_bal
@@ -124,9 +127,13 @@ def sync_real_wallet_balance():
                 coins_state[p]["asset_balance"] = 0.0
                 coins_state[p]["in_position"] = False
                 
-        print(f"Sinkronisasi Berhasil! Saldo IDR Asli di Indodax: Rp {idr_total:,.2f}")
+            total_coins_val += coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]
+        
+        # Total Estimasi Aset = Saldo IDR Utama + Nilai Aset Koin yang sedang di-hold
+        wallet_main_state["total_asset_equity"] = idr_total + total_coins_val
+        print(f"Sinkronisasi Berhasil! Saldo IDR Utama: Rp {idr_total:,.2f}")
     else:
-        print("Gagal mengambil saldo dari Indodax, periksa izin API Key / Secret Key (pastikan mencentang Info & Trade).")
+        print("Gagal mengambil saldo dari Indodax, periksa izin API Key / Secret Key.")
 
 def get_main_keyboard():
     return {
@@ -207,7 +214,10 @@ def fetch_price(pair):
     return st["last_market_price"]
 
 def get_indodax_style_dashboard():
-    total_equity = sum(st["idr_balance"] + (st["asset_balance"] * st["last_market_price"]) for st in coins_state.values())
+    # Perbarui total nilai aset berdasarkan saldo utama + nilai koin
+    total_coins_val = sum(st["asset_balance"] * st["last_market_price"] for st in coins_state.values())
+    total_equity = wallet_main_state["idr_balance"] + total_coins_val
+    
     total_wins = sum(st["winning_trades"] for st in coins_state.values())
     total_losses = sum(st["losing_trades"] for st in coins_state.values())
     now_wib = get_wib_time()
@@ -226,7 +236,7 @@ def get_indodax_style_dashboard():
         asset_val = st["asset_balance"] * price
         
         pair_display = "SOL/IDR" if p == "solidr" else ("USDT/IDR" if p == "usdtidr" else p.upper())
-        pos_str = f"Hold ({st['asset_balance']:,.4f})" if st["in_position"] else f"IDR Ready (Rp {st['idr_balance']:,.0f})"
+        pos_str = f"Hold ({st['asset_balance']:,.4f})" if st["in_position"] else f"IDR Ready (Rp {wallet_main_state['idr_balance']:,.0f})"
         chart_vis = "".join(st["chart_history"])
 
         text_blocks.append(
@@ -246,7 +256,9 @@ def get_indodax_style_dashboard():
     return "\n".join(text_blocks)
 
 def get_pl_report_text():
-    total_equity = sum(st["idr_balance"] + (st["asset_balance"] * st["last_market_price"]) for st in coins_state.values())
+    total_coins_val = sum(st["asset_balance"] * st["last_market_price"] for st in coins_state.values())
+    total_equity = wallet_main_state["idr_balance"] + total_coins_val
+    
     total_wins = sum(st["winning_trades"] for st in coins_state.values())
     total_losses = sum(st["losing_trades"] for st in coins_state.values())
     total_profit = sum(st["total_profit_idr"] for st in coins_state.values())
@@ -305,7 +317,7 @@ def handle_update(update):
 
         if data == "btn_refresh":
             sync_real_wallet_balance()
-            answer_callback(cb_id, "🔄 Saldo berhasil disinkronkan dari Indodax!")
+            answer_callback(cb_id, "🔄 Saldo utama berhasil disinkronkan!")
             update_menu(chat_id, msg_id, get_indodax_style_dashboard())
         elif data == "btn_check_pl":
             answer_callback(cb_id, "Menampilkan Laporan...")
@@ -328,7 +340,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot Telegram Berjalan dengan Sinkronisasi Saldo Real-Time...")
+    print("Bot Telegram Berjalan dengan Saldo Utama Real-Sync...")
     while True:
         try:
             params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
