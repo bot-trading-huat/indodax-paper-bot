@@ -1,14 +1,14 @@
 import os
 import time
-import json
 import threading
 import urllib.request
 import urllib.parse
+import json
 import hmac
 import hashlib
 from datetime import datetime, timezone, timedelta
-import sys
 
+import sys
 sys.stdout.reconfigure(line_buffering=True)
 
 WIB = timezone(timedelta(hours=7))
@@ -16,157 +16,122 @@ WIB = timezone(timedelta(hours=7))
 def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
+def get_wib_datetime():
+    return datetime.now(WIB)
+
 # ==========================================
-# CONFIGURATION REAL ACCOUNT
+# CONFIGURATION (Gunakan Environment Variables!)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8026634236")
 
-# API Credentials Indodax (Uang Asli)
 INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK").strip()
 INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b").strip()
 
-# Pair Crypto (Contoh: btc_idr, eth_idr, solidr)
-PAIR = os.getenv("PAIR", "btc_idr").lower()
-BASE_COIN = PAIR.replace("idr", "").lower()
+FEE_RATE = float(os.getenv("FEE_RATE", 0.0021)) 
+PAIRS = ["solidr", "usdtidr"]
 
-state = {
-    "is_running": True,
-    "idr_balance": 0.0,
-    "asset_balance": 0.0,
-    "in_position": False,
-    "buy_price": 0.0,
-    "total_trades": 0,
-    "winning_trades": 0,
-    "losing_trades": 0,
-    "minute_logs": [],
+coins_state = {}
+for p in PAIRS:
+    coins_state[p] = {
+        "is_running": True,
+        "idr_balance": 0.0,
+        "asset_balance": 0.0,
+        "in_position": False,
+        "buy_price": 0.0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "total_profit_idr": 0.0,
+        "total_loss_idr": 0.0,
+        "logs": ["Bot diinisialisasi & terhubung ke Indodax."],
+        "last_market_price": 0.0,
+        "price_trend": "⏺",
+        "chart_history": ["—", "—", "—", "—", "—", "—", "—", "—"]
+    }
+
+global_state = {
     "dashboard_msg_id": None,
-    "dashboard_chat_id": ALLOWED_CHAT_ID,
-    "last_rendered_text": "",
-    "last_market_price": 0.0
+    "dashboard_chat_id": ALLOWED_CHAT_ID if ALLOWED_CHAT_ID else None,
+    "last_rendered_text": ""
 }
 
-state_lock = threading.Lock()
+def telegram(method, params=None):
+    if not TOKEN: return None
+    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
+    try:
+        data = json.dumps(params or {}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
 
-# ==========================================
-# INDODAX PRIVATE API (TAPI - UANG ASLI)
-# ==========================================
 def indodax_private_request(method_name, extra_params=None):
     if not INDODAX_API_KEY or not INDODAX_SECRET_KEY:
-        print("❌ API Key atau Secret Key belum disetting!")
         return None
-        
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
-    params = {"method": method_name, "nonce": nonce}
-    if extra_params:
+    params = {
+        "method": method_name,
+        "nonce": nonce
+    }
+    if extra_params: 
         params.update(extra_params)
         
     post_data_str = urllib.parse.urlencode(params)
     post_data = post_data_str.encode("utf-8")
     
-    sign = hmac.new(
-        INDODAX_SECRET_KEY.encode('utf-8'), 
-        post_data_str.encode('utf-8'), 
-        hashlib.sha512
-    ).hexdigest()
-    
+    sign = hmac.new(INDODAX_SECRET_KEY.encode('utf-8'), post_data, hashlib.sha512).hexdigest()
     headers = {
         "Key": INDODAX_API_KEY,
         "Sign": sign,
         "Content-Type": "application/x-www-form-urlencoded",
         "User-Agent": "Mozilla/5.0"
     }
-    
     try:
         req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=7) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw_response = resp.read().decode("utf-8")
+            return json.loads(raw_response)
     except Exception as e:
-        print(f"❌ Indodax Private API Error ({method_name}):", e)
+        print(f"API Error ({method_name}):", e)
         return None
 
 def sync_real_wallet_balance():
+    """Mengambil saldo IDR dan koin langsung dari akun Indodax"""
     res = indodax_private_request("getInfo")
+    
     if res and res.get("success") == 1:
         ret = res.get("return", {})
+        # Pada Indodax API v1, saldo (bebas) berada di objek 'balance'
         balances = ret.get("balance", {})
         
-        idr_total = float(balances.get("idr") or balances.get("IDR") or 0)
-        coin_total = float(balances.get(BASE_COIN) or balances.get(BASE_COIN.upper()) or 0)
+        # Ambil saldo IDR
+        idr_total = float(balances.get("idr", 0))
+        share_idr = idr_total / len(PAIRS) if len(PAIRS) > 0 else idr_total
         
-        with state_lock:
-            state["idr_balance"] = idr_total
-            state["asset_balance"] = coin_total
-            state["in_position"] = coin_total > 0.0001
-        
-        print(f"✅ SALDO REAL SYNCED | IDR: Rp {idr_total:,.2f} | {BASE_COIN.upper()}: {coin_total}")
+        for p in PAIRS:
+            coins_state[p]["idr_balance"] = share_idr
+            
+            # Ambil simbol koin dasar (misal 'solidr' -> 'sol', 'usdtidr' -> 'usdt')
+            base_coin = p.replace("idr", "").lower()
+            coin_bal = float(balances.get(base_coin, 0))
+            
+            coins_state[p]["asset_balance"] = coin_bal
+            coins_state[p]["in_position"] = (coin_bal > 0.0001)
+                
+        print(f"✅ Sinkronisasi Berhasil! Saldo IDR: Rp {idr_total:,.2f}")
     else:
-        print("❌ GAGAL MEMBACA SALDO INDODAX REAL:", res)
-
-def execute_real_buy(idr_amount):
-    """Mengeksekusi Order Beli Instan di Indodax dengan Uang Asli"""
-    params = {
-        "pair": PAIR,
-        "type": "buy",
-        "price": str(int(state["last_market_price"])),
-        "idr": str(int(idr_amount))
-    }
-    return indodax_private_request("trade", params)
-
-def execute_real_sell(coin_amount):
-    """Mengeksekusi Order Jual Instan di Indodax dengan Uang Asli"""
-    params = {
-        "pair": PAIR,
-        "type": "sell",
-        "price": str(int(state["last_market_price"])),
-        "coin": str(coin_amount)
-    }
-    return indodax_private_request("trade", params)
-
-# ==========================================
-# PUBLIC MARKET PRICE FETCH
-# ==========================================
-def get_indodax_price():
-    url = f"https://indodax.com/api/ticker/{PAIR}"
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            price = float(data["ticker"]["last"])
-            with state_lock:
-                state["last_market_price"] = price
-            return price
-    except Exception as e:
-        print("Error fetch price:", e)
-        return state["last_market_price"]
-
-# ==========================================
-# TELEGRAM HELPERS & DASHBOARD
-# ==========================================
-def telegram(method, params=None):
-    if not TOKEN: return None
-    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
-    data = json.dumps(params or {}).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print("Telegram API Error:", e)
-        return None
+        err_msg = res.get("error", "Koneksi Gagal") if res else "No Response"
+        print(f"❌ Gagal mengambil saldo: {err_msg}")
 
 def get_main_keyboard():
-    play_stop_btn = (
-        {"text": "⏹ Hentikan Bot", "callback_data": "btn_stop"}
-        if state["is_running"]
-        else {"text": "▶️ Jalankan Bot", "callback_data": "btn_start"}
-    )
     return {
         "inline_keyboard": [
-            [play_stop_btn],
-            [{"text": "🔄 Synchronize Saldo Real", "callback_data": "btn_sync"}],
-            [{"text": f"⚡ Harga {PAIR.upper()} Real-Time", "callback_data": "btn_price"}]
+            [
+                {"text": "🔄 Refresh Dashboard", "callback_data": "btn_refresh"},
+                {"text": "💰 Cek Saldo & P/L", "callback_data": "btn_check_pl"}
+            ]
         ]
     }
 
@@ -178,82 +143,154 @@ def send_menu(chat_id, text):
         "reply_markup": get_main_keyboard()
     })
     if res and res.get("ok"):
-        with state_lock:
-            state["dashboard_msg_id"] = res["result"]["message_id"]
-            state["dashboard_chat_id"] = chat_id
-            state["last_rendered_text"] = text
+        global_state["dashboard_msg_id"] = res["result"]["message_id"]
+        global_state["dashboard_chat_id"] = chat_id
+        global_state["last_rendered_text"] = text
     return res
 
 def update_menu(chat_id, message_id, text):
-    with state_lock:
-        state["dashboard_msg_id"] = message_id
-        state["dashboard_chat_id"] = chat_id
-        state["last_rendered_text"] = text
-
-    return telegram("editMessageText", {
+    global_state["dashboard_chat_id"] = chat_id
+    global_state["last_rendered_text"] = text
+    res = telegram("editMessageText", {
         "chat_id": str(chat_id),
         "message_id": message_id,
         "text": text,
         "parse_mode": "Markdown",
         "reply_markup": get_main_keyboard()
     })
+    if not res or not res.get("ok"):
+        send_menu(chat_id, text)
 
-def answer_callback(callback_query_id, text=None):
-    payload = {"callback_query_id": callback_query_id}
+def send_message_with_keyboard(chat_id, text):
+    return telegram("sendMessage", {
+        "chat_id": str(chat_id),
+        "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": get_main_keyboard()
+    })
+
+def answer_callback(cb_id, text=None):
+    payload = {"callback_query_id": cb_id}
     if text: payload["text"] = text
     return telegram("answerCallbackQuery", payload)
 
-def get_home_text():
-    with state_lock:
-        is_running = state["is_running"]
-        idr_bal = state["idr_balance"]
-        asset_bal = state["asset_balance"]
-        in_pos = state["in_position"]
-        logs = list(state["minute_logs"])
-        price = state["last_market_price"]
+def fetch_price(pair):
+    url = f"https://indodax.com/api/ticker/{pair}"
+    st = coins_state[pair]
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if "ticker" in data and "last" in data["ticker"]:
+                new_price = float(data["ticker"]["last"])
+                if new_price > 0:
+                    if st["last_market_price"] > 0:
+                        if new_price > st["last_market_price"]:
+                            st["price_trend"] = "🔺"
+                            char = "▇"
+                        elif new_price < st["last_market_price"]:
+                            st["price_trend"] = "🔻"
+                            char = "▂"
+                        else:
+                            st["price_trend"] = "⏺"
+                            char = "—"
+                        st["chart_history"].append(char)
+                        if len(st["chart_history"]) > 6: st["chart_history"].pop(0)
+                    
+                    st["last_market_price"] = new_price
+                    return new_price
+    except Exception as e:
+        print(f"Fetch price error for {pair}:", e)
+    return st["last_market_price"]
 
-    status_str = "🟢 *BERJALAN (REAL TRADING)*" if is_running else "🔴 *BERHENTI (STOPPED)*"
-    asset_val = asset_bal * price
-    total_equity = idr_bal + asset_val
+def get_indodax_style_dashboard():
+    total_equity = sum(st["idr_balance"] + (st["asset_balance"] * st["last_market_price"]) for st in coins_state.values())
+    total_wins = sum(st["winning_trades"] for st in coins_state.values())
+    total_losses = sum(st["losing_trades"] for st in coins_state.values())
     now_wib = get_wib_time()
 
-    pos_info = f"⚡ *Posisi:* Holding {BASE_COIN.upper()} ({asset_bal:,.4f})" if in_pos else "💵 *Posisi:* Standby (Saldo IDR Siap)"
+    text_blocks = [
+        f"📊 *INDODAX LIVE DASHBOARD* 📊\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 *Estimasi Total Aset:* *Rp {total_equity:,.2f}*\n"
+        f"📈 *Statistik:* 🟢 {total_wins} Win | 🔴 {total_losses} Loss\n\n"
+        f"📦 *Rincian Pasar & Saldo (Real-Sync):*"
+    ]
 
-    logs_str = "\n".join(logs[-6:]) if logs else "Memantau pasar akun real..."
+    for p in PAIRS:
+        st = coins_state[p]
+        price = st["last_market_price"]
+        asset_val = st["asset_balance"] * price
+        
+        pair_display = "SOL/IDR" if p == "solidr" else ("USDT/IDR" if p == "usdtidr" else p.upper())
+        pos_str = f"Hold ({st['asset_balance']:,.4f})" if st["in_position"] else f"IDR Ready (Rp {st['idr_balance']:,.0f})"
+        chart_vis = "".join(st["chart_history"])
+
+        text_blocks.append(
+            f"\n🔹 *{pair_display}* [🟢 Aktif {st['price_trend']}]\n"
+            f"   • Harga: Rp {price:,.2f}\n"
+            f"   • Nilai: Rp {asset_val:,.2f}\n"
+            f"   • Grafik: `{chart_vis}`\n"
+            f"   • Posisi: {pos_str}"
+        )
+
+    all_logs = [f"[{p.upper()}] {lg}" for p in PAIRS for lg in coins_state[p]["logs"][-2:]]
+    logs_str = "\n".join(all_logs) if all_logs else "Memantau pergerakan market..."
+
+    text_blocks.append(f"\n📋 *LOG AKTIVITAS:*\n```{logs_str}```")
+    text_blocks.append(f"━━━━━━━━━━━━━━━━━━━\n⏱ *Live Sync:* `{now_wib} WIB`")
+
+    return "\n".join(text_blocks)
+
+def get_pl_report_text():
+    total_equity = sum(st["idr_balance"] + (st["asset_balance"] * st["last_market_price"]) for st in coins_state.values())
+    total_wins = sum(st["winning_trades"] for st in coins_state.values())
+    total_losses = sum(st["losing_trades"] for st in coins_state.values())
+    total_profit = sum(st["total_profit_idr"] for st in coins_state.values())
+    total_loss = sum(st["total_loss_idr"] for st in coins_state.values())
+    net_pl = total_profit - total_loss
+    net_sign = "+" if net_pl >= 0 else ""
 
     return (
-        f"🔴 *BOT TRADING INDODAX (AKUN REAL)* 🔴\n"
-        f"📌 Pair Target: *{PAIR.upper()}*\n\n"
-        f"Status Bot: {status_str}\n"
-        f"💰 *Total Equity Real:* Rp {total_equity:,.2f}\n"
-        f"💳 *Saldo IDR Real:* Rp {idr_bal:,.2f}\n"
-        f"📦 *Nilai Aset Real:* Rp {asset_val:,.2f}\n"
-        f"{pos_info}\n"
-        f"⏱ _Live Update: {now_wib} WIB_\n\n"
-        f"📋 *LOG TRANSAKSI:* \n```\n{logs_str}\n```\n"
-        f"Gunakan menu di bawah untuk mengelola bot:"
+        f"💰 *LAPORAN SALDO & PROFIT/LOSS* 💰\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"• *Total Estimasi Saldo/Aset:* Rp {total_equity:,.2f}\n"
+        f"• *Total Win:* {total_wins} Kali\n"
+        f"• *Total Loss:* {total_losses} Kali\n"
+        f"• *Akumulasi Profit:* +Rp {total_profit:,.2f}\n"
+        f"• *Akumulasi Loss:* -Rp {total_loss:,.2f}\n"
+        f"• *Net Result (P/L):* *{net_sign}Rp {net_pl:,.2f}*\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ _Waktu Cek: {get_wib_time()} WIB_"
     )
 
-# ==========================================
-# TRADING ENGINE & WORKERS
-# ==========================================
-def background_worker():
+def background_market_worker():
     while True:
-        try:
-            get_indodax_price()
-            sync_real_wallet_balance()
+        for p in PAIRS:
+            fetch_price(p)
+        
+        if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
+            try:
+                update_menu(global_state["dashboard_chat_id"], global_state["dashboard_msg_id"], get_indodax_style_dashboard())
+            except Exception:
+                pass
+        time.sleep(5)
 
-            with state_lock:
-                is_running = state["is_running"]
-                chat_id = state["dashboard_chat_id"]
-                msg_id = state["dashboard_msg_id"]
-
-            if is_running and chat_id and msg_id:
-                new_text = get_home_text()
-                update_menu(chat_id, msg_id, new_text)
-        except Exception as e:
-            print("Background Worker Error:", e)
-        time.sleep(10)
+def daily_reset_worker():
+    while True:
+        now = get_wib_datetime()
+        if now.hour == 0 and now.minute == 0 and now.second <= 5:
+            if global_state["dashboard_chat_id"]:
+                report = "🌙 *REKAP HARIAN OTOMATIS (00:00 WIB)* 🌙\n\n" + get_pl_report_text()
+                send_message_with_keyboard(global_state["dashboard_chat_id"], report)
+                
+                for p in PAIRS:
+                    coins_state[p]["winning_trades"] = 0
+                    coins_state[p]["losing_trades"] = 0
+                    coins_state[p]["total_profit_idr"] = 0.0
+                    coins_state[p]["total_loss_idr"] = 0.0
+            time.sleep(70)
+        time.sleep(1)
 
 def handle_update(update):
     if "callback_query" in update:
@@ -263,23 +300,13 @@ def handle_update(update):
         msg_id = cb["message"]["message_id"]
         data = cb.get("data", "")
 
-        if data == "btn_start":
-            with state_lock:
-                state["is_running"] = True
-            answer_callback(cb_id, "▶️ Bot Real Trading Dijalankan.")
-            update_menu(chat_id, msg_id, get_home_text())
-        elif data == "btn_stop":
-            with state_lock:
-                state["is_running"] = False
-            answer_callback(cb_id, "⏹ Bot Real Trading Dihentikan.")
-            update_menu(chat_id, msg_id, get_home_text())
-        elif data == "btn_sync":
+        if data == "btn_refresh":
             sync_real_wallet_balance()
-            answer_callback(cb_id, f"✅ Saldo Real Diperbarui: Rp {state['idr_balance']:,.2f}")
-            update_menu(chat_id, msg_id, get_home_text())
-        elif data == "btn_price":
-            price = get_indodax_price()
-            answer_callback(cb_id, f"Harga {PAIR.upper()}: Rp {price:,.0f}")
+            answer_callback(cb_id, "🔄 Saldo berhasil disinkronkan dari Indodax!")
+            update_menu(chat_id, msg_id, get_indodax_style_dashboard())
+        elif data == "btn_check_pl":
+            answer_callback(cb_id, "Menampilkan Laporan...")
+            send_message_with_keyboard(chat_id, get_pl_report_text())
         return
 
     if "message" in update:
@@ -290,12 +317,15 @@ def handle_update(update):
 
         if text.startswith("/start") or text.startswith("/menu"):
             sync_real_wallet_balance()
-            send_menu(chat_id, get_home_text())
+            send_menu(chat_id, get_indodax_style_dashboard())
+        elif text.startswith("/saldo") or text.startswith("/pl"):
+            sync_real_wallet_balance()
+            send_message_with_keyboard(chat_id, get_pl_report_text())
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot Real Trading Aktif...")
+    print("Bot Telegram Berjalan dengan Sinkronisasi Saldo Real-Time...")
     while True:
         try:
             params = {"timeout": 20, "allowed_updates": json.dumps(["message", "callback_query"])}
@@ -307,10 +337,13 @@ def polling():
                     handle_update(upd)
         except Exception as e:
             print("Polling Error:", e)
-            time.sleep(4)
+            time.sleep(2)
 
 if __name__ == "__main__":
-    get_indodax_price()
     sync_real_wallet_balance()
-    threading.Thread(target=background_worker, daemon=True).start()
+    for p in PAIRS:
+        fetch_price(p)
+
+    threading.Thread(target=background_market_worker, daemon=True).start()
+    threading.Thread(target=daily_reset_worker, daemon=True).start()
     polling()
