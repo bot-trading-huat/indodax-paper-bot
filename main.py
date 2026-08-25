@@ -179,7 +179,6 @@ def get_home_text(is_final=False):
 
     pos_info = f"• Posisi: Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else f"• Posisi: IDR Ready (Rp {idr_bal:,.0f})"
     chart_str = generate_block_chart()
-    trend_icon = state["price_trend"]
 
     if state["minute_logs"]:
         logs_str = "\n".join(state["minute_logs"])
@@ -192,8 +191,8 @@ def get_home_text(is_final=False):
         profit_str = f"Rp {profit_loss_minute:+,.2f}"
 
         return (
-            f"🔹 *BTC/IDR* {status_str}\n"
-            f"• Harga: Rp {price:,.2f} {trend_icon}\n"
+            f"🔹 *BTC/IDR* {status_str} {state['price_trend']}\n"
+            f"• Harga: Rp {price:,.2f}\n"
             f"• Nilai: Rp {btc_amt * price:,.2f}\n"
             f"• Grafik: `{chart_str}`\n"
             f"{pos_info}\n"
@@ -206,8 +205,8 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🔹 *BTC/IDR* {status_str}\n"
-        f"• Harga: Rp {price:,.2f} {trend_icon}\n"
+        f"🔹 *BTC/IDR* {status_str} {state['price_trend']}\n"
+        f"• Harga: Rp {price:,.2f}\n"
         f"• Nilai: Rp {btc_amt * price:,.2f}\n"
         f"• Grafik: `{chart_str}`\n"
         f"{pos_info}\n\n"
@@ -223,9 +222,8 @@ def get_home_text(is_final=False):
 def auto_refresh_dashboard_loop():
     while True:
         try:
-            # Tetap ambil harga & perbarui grafik meskipun bot sedang tidak aktif/berhenti
+            # Tetap ambil harga secara berkala agar grafik terbarui meskipun bot tidak sedang running
             get_indodax_price()
-            
             if state["dashboard_chat_id"] and state["dashboard_msg_id"]:
                 new_text = get_home_text()
                 if new_text != state["last_rendered_text"]:
