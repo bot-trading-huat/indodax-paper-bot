@@ -61,7 +61,7 @@ global_state = {
 }
 
 # ==========================================
-# API HELPERS (Disesuaikan untuk Trade API V2)
+# API HELPERS (Trade API V2)
 # ==========================================
 def telegram(method, params=None):
     if not TOKEN: return None
@@ -78,7 +78,6 @@ def indodax_private_request(endpoint_path, extra_params=None):
     if not INDODAX_API_KEY or not INDODAX_SECRET_KEY:
         return None
     
-    # Endpoint Trade API V2 Indodax menggunakan basis URL /tapi/v2/
     url = f"https://indodax.com/tapi/v2/{endpoint_path}"
     nonce = str(int(time.time() * 1000))
     params = {"nonce": nonce}
@@ -103,7 +102,6 @@ def indodax_private_request(endpoint_path, extra_params=None):
         return None
 
 def sync_real_wallet_balance():
-    # Menggunakan endpoint 'getInfo' untuk Trade API V2
     res = indodax_private_request("getInfo")
     if res and (res.get("success") == 1 or res.get("status") == "success"):
         balances = res.get("return", {}).get("balance", {})
@@ -346,7 +344,8 @@ def single_coin_trading_worker(pair):
                 now_wib = get_wib_time()
                 is_market_good = (st["price_trend"] == "🔺") or (len(st["chart_history"]) >= 3 and st["chart_history"][-1] == "▇")
 
-                if not st["in_position"] and st["idr_balance"] > 10000 and is_market_good:
+                # Batas minimal saldo diturunkan ke Rp 5.000 agar saldo kecil terbaca/bisa dieksekusi
+                if not st["in_position"] and st["idr_balance"] > 5000 and is_market_good:
                     indodax_private_request("trade", {
                         "pair": pair, "type": "buy",
                         "idr": int(st["idr_balance"] * (1 - FEE_RATE))
