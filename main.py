@@ -17,13 +17,14 @@ def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
-# CONFIGURATION
+# CONFIGURATION - MASUKKAN API KEY BARU ANDA DI SINI
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8026634236")
 
-INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "JCHAJJYO-GERKVM4O-2IJLK5QY-2KO7MPFL-UOJTQD5S")
-INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "6eecb43aefbf4796227bc664286d9a8c802698da9c316a1decef6f59ca9c5c5a6030cf3406cb6377")
+# Gunakan API Key dan Secret Key baru dari dashboard Indodax Anda:
+INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK")
+INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "MASUKKAN_SECRET_KEY_BARU_ANDA_DI_SINI")
 
 PAIRS = ["solidr", "usdtidr"]
 
@@ -89,20 +90,33 @@ def indodax_private_request(method_name, extra_params=None):
 
 def sync_real_wallet_balance():
     res = indodax_private_request("getInfo")
+    print("--- DEBUG RESPON INDODAX INFO ---", res)
     
     if res and res.get("success") == 1:
         ret = res.get("return", {})
+        balances = ret.get("balance", {})
+        funds = ret.get("funds", {})
         
-        # FIX UTAMA: Membaca saldo IDR dari struktur API Indodax yang benar (balance_idr)
-        idr_total = float(ret.get("balance_idr", ret.get("balance", {}).get("idr", 0)))
+        idr_total = float(
+            ret.get("balance_idr") or 
+            balances.get("idr") or 
+            balances.get("IDR") or 
+            funds.get("idr") or 
+            funds.get("IDR") or 
+            0
+        )
         wallet_main_state["idr_balance"] = idr_total
-        
-        coin_balances = ret.get("balance", {})
         
         total_coins_val = 0.0
         for p in PAIRS:
             base_coin = p.replace("idr", "")
-            coin_bal = float(coin_balances.get(base_coin, coin_balances.get(base_coin.upper(), 0)))
+            coin_bal = float(
+                balances.get(base_coin) or 
+                balances.get(base_coin.upper()) or 
+                funds.get(base_coin) or 
+                funds.get(base_coin.upper()) or 
+                0
+            )
             
             if coin_bal > 0:
                 coins_state[p]["asset_balance"] = coin_bal
@@ -114,9 +128,9 @@ def sync_real_wallet_balance():
             total_coins_val += coins_state[p]["asset_balance"] * coins_state[p]["last_market_price"]
         
         wallet_main_state["total_asset_equity"] = idr_total + total_coins_val
-        print(f"✅ SYNC BERHASIL | Saldo IDR: Rp {idr_total:,.2f} | Total Aset: Rp {wallet_main_state['total_asset_equity']:,.2f}")
+        print(f"✅ SYNC BERHASIL | Saldo/Aset: Rp {wallet_main_state['total_asset_equity']:,.2f}")
     else:
-        print("❌ GAGAL SYNC SALDO DARI INDODAX!")
+        print("❌ GAGAL SYNC! Cek kembali API Key dan Secret Key Anda.")
 
 def get_main_keyboard():
     return {
@@ -249,8 +263,8 @@ def get_pl_report_text():
     return (
         f"💰 *LAPORAN SALDO & PROFIT/LOSS* 💰\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
+        f"• *Estimasi Total Aset:* *Rp {total_equity:,.2f}*\n"
         f"• *Saldo IDR Utama:* Rp {wallet_main_state['idr_balance']:,.2f}\n"
-        f"• *Total Estimasi Aset:* Rp {total_equity:,.2f}\n"
         f"• *Total Win:* {total_wins} Kali\n"
         f"• *Total Loss:* {total_losses} Kali\n"
         f"• *Akumulasi Profit:* +Rp {total_profit:,.2f}\n"
@@ -264,7 +278,7 @@ def background_market_worker():
     while True:
         for p in PAIRS:
             fetch_price(p)
-        sync_real_wallet_balance()  # Update saldo berkala tiap siklus
+        sync_real_wallet_balance()
         
         if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
             try:
