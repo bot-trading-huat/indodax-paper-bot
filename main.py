@@ -28,7 +28,7 @@ pairs_state = {
     "btcidr": {
         "name": "BTC/IDR",
         "symbol": "btc",
-        "is_running": False,
+        "is_running": True,  # Otomatis aktif saat bot dinyalakan agar langsung gas
         "in_position": False,
         "buy_price": 0.0,
         "total_trades": 0,
@@ -38,12 +38,12 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=4),
+        "minute_logs": deque(["BOT AGRESIF DIMULAI !!"], maxlen=4),
     },
     "usdtidr": {
         "name": "USDT/IDR",
         "symbol": "usdt",
-        "is_running": False,
+        "is_running": True,  # Otomatis aktif
         "in_position": False,
         "buy_price": 0.0,
         "total_trades": 0,
@@ -53,7 +53,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=4),
+        "minute_logs": deque(["BOT AGRESIF DIMULAI !!"], maxlen=4),
     }
 }
 
@@ -69,7 +69,7 @@ def telegram(method, params=None):
     try:
         data = json.dumps(params or {}).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
@@ -77,8 +77,8 @@ def telegram(method, params=None):
 def add_log(pair_key, text):
     timestamp = get_wib_time()
     p_logs = pairs_state[pair_key]["minute_logs"]
-    if len(p_logs) == 0 or p_logs[0] != "SEMOGA GACOR !!":
-        p_logs.appendleft("SEMOGA GACOR !!")
+    if len(p_logs) == 0 or "BOT AGRESIF" in p_logs[0]:
+        p_logs.appendleft("GACOR TERUS !!")
     p_logs.append(f"[{timestamp}] {text}")
 
 def update_market_prices():
@@ -129,7 +129,7 @@ def fetch_realtime_account():
 
     try:
         req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             if res.get("success") == 1:
                 balances = res.get("return", {}).get("balance", {})
@@ -182,21 +182,6 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     except Exception as e:
         return False, str(e)
 
-def auto_split_and_convert_balance():
-    time.sleep(2)
-    success, idr_cash, _, usdt_amt, _, err = fetch_realtime_account()
-    if not success:
-        return
-
-    if usdt_amt < 1.0 and idr_cash > 50000:
-        target_conversion_idr = (idr_cash / 2) * 0.995
-        add_log("usdtidr", f"Otomatis membagi & menukar separuh IDR ke USDT...")
-        success_order, res_data = execute_real_order("usdtidr", "buy", amount_idr=target_conversion_idr)
-        if success_order:
-            add_log("usdtidr", "Pembagian saldo ke USDT Berhasil!")
-        else:
-            add_log("usdtidr", f"Gagal konversi: {res_data}")
-
 def get_main_keyboard():
     btc_running = pairs_state["btcidr"]["is_running"]
     usdt_running = pairs_state["usdtidr"]["is_running"]
@@ -207,7 +192,7 @@ def get_main_keyboard():
                 {"text": f"{'⏹ Hentikan BTC' if btc_running else '▶️ Jalankan BTC'}", "callback_data": "toggle_btcidr"},
                 {"text": f"{'⏹ Hentikan USDT' if usdt_running else '▶️ Jalankan USDT'}", "callback_data": "toggle_usdtidr"}
             ],
-            [{"text": "🔄 Bagi/Pindahkan Saldo ke USDT", "callback_data": "btn_split_usdt"}],
+            [{"text": "🔄 Paksa Sell/Cairkan Aset ke IDR", "callback_data": "btn_liquidate"}],
             [{"text": "📊 Status Lengkap & Saldo", "callback_data": "btn_status"}],
             [{"text": "📈 Laporan Performa Global", "callback_data": "btn_report"}]
         ]
@@ -226,7 +211,7 @@ def get_home_text(is_final=False):
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
     now_wib = get_wib_time()
-    header_status = "🏁 FINAL" if is_final else "📊 LIVE DASHBOARD"
+    header_status = "🏁 FINAL" if is_final else "🔥 AGGRESSIVE LIVE DASHBOARD"
 
     # 1. DATA BTC
     btc_p = pairs_state["btcidr"]
@@ -238,8 +223,7 @@ def get_home_text(is_final=False):
     if btc_p["in_position"]:
         btc_pos = f"Memegang Aset ({btc_amt:.6f} BTC)"
     else:
-        btc_idr_ready = idr_bal / 2 if (idr_bal > 0) else 0.0
-        btc_pos = f"IDR Ready (Rp {btc_idr_ready:,.0f})"
+        btc_pos = f"IDR Ready (Rp {idr_bal:,.0f})"
         
     btc_logs = "\n".join(btc_p["minute_logs"])
 
@@ -279,7 +263,6 @@ def get_home_text(is_final=False):
     )
 
 def auto_refresh_dashboard_loop():
-    """Mengupdate pesan dashboard aktif secara live setiap detik"""
     while True:
         try:
             update_market_prices()
@@ -297,15 +280,14 @@ def auto_refresh_dashboard_loop():
                         global_state["last_rendered_text"] = new_text
         except Exception as e:
             print("Auto Refresh Error:", e)
-        time.sleep(1)
+        time.sleep(2)
 
 def minute_report_worker():
-    """Setiap 1 menit: Menandai chat aktif lama menjadi FINAL, lalu mengirim chat baru sebagai dashboard aktif berikutnya"""
+    """Setiap 1 menit: Menandai chat aktif lama menjadi FINAL, lalu mengirim chat baru di bawahnya"""
     while True:
         time.sleep(60)
         if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
             try:
-                # 1. Ubah chat sebelumnya menjadi FINAL
                 final_text = get_home_text(is_final=True)
                 telegram("editMessageText", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
@@ -315,7 +297,6 @@ def minute_report_worker():
                     "reply_markup": get_main_keyboard()
                 })
 
-                # 2. Kirim chat baru di bawahnya untuk dilanjutkan secara live
                 new_live_text = get_home_text(is_final=False)
                 res = telegram("sendMessage", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
@@ -330,7 +311,6 @@ def minute_report_worker():
                 print("Minute Report Worker Error:", e)
 
 def daily_midnight_report_worker():
-    """Rekap laporan jam 00.00 WIB"""
     while True:
         now = datetime.now(WIB)
         if now.hour == 0 and now.minute == 0:
@@ -348,7 +328,7 @@ def daily_midnight_report_worker():
                     f"• Total Trade: {total_trades}x\n"
                     f"• Win: {total_win} | Lose: {total_lose}\n"
                     f"• **Profit Harian: Rp {total_daily_profit:,.2f}**\n\n"
-                    f"_Bot melanjutkan sesi hari baru! Semoga Gacor!_"
+                    f"_Bot melanjutkan sesi hari baru! Gacor Terus!_"
                 )
                 telegram("sendMessage", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
@@ -359,13 +339,11 @@ def daily_midnight_report_worker():
                 u['daily_profit_idr'] = 0.0
                 b['total_trades'] = 0; b['winning_trades'] = 0; b['losing_trades'] = 0
                 u['total_trades'] = 0; u['winning_trades'] = 0; u['losing_trades'] = 0
-            
             time.sleep(65)
         time.sleep(15)
 
 def pair_trading_worker(pair_key):
     p_data = pairs_state[pair_key]
-    highest_price = 0.0
 
     while True:
         try:
@@ -374,29 +352,40 @@ def pair_trading_worker(pair_key):
                 current_price = p_data["last_market_price"]
 
                 if success and current_price > 0:
+                    # KONDISI 1: Belum punya posisi, cari peluang beli secara agresif (minimal sisa IDR Rp 10.000)
                     if not p_data["in_position"]:
-                        if pair_key == "btcidr" and idr_cash >= 20000:
-                            buy_idr = (idr_cash / 2) * 0.995
-                            add_log(pair_key, f"Mencoba BUY BTC dg Rp {buy_idr:,.0f}...")
+                        if pair_key == "btcidr" and idr_cash >= 10000:
+                            buy_idr = idr_cash * 0.98  # Pakai hampir seluruh IDR cash demi agresif
+                            add_log(pair_key, f"Agresif BUY BTC Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=buy_idr)
                             if success_order:
                                 p_data["buy_price"] = current_price
-                                highest_price = current_price
                                 p_data["in_position"] = True
-                                add_log(pair_key, f"BUY BERHASIL @ Rp {current_price:,.0f}")
-                        elif pair_key == "usdtidr" and usdt_amt >= 2.0:
-                            add_log(pair_key, f"Bot USDT siap bekerja...")
+                                add_log(pair_key, f"BUY SUKSES @ Rp {current_price:,.0f}")
+                            else:
+                                add_log(pair_key, f"Gagal Buy: {res_data}")
 
+                        elif pair_key == "usdtidr":
+                            # Jika ada IDR sisa tapi mau main di USDT/IDR
+                            if idr_cash >= 10000:
+                                buy_idr = idr_cash * 0.98
+                                add_log(pair_key, f"Agresif BUY USDT dengan Rp {buy_idr:,.0f}...")
+                                execute_real_order(pair_key, "buy", amount_idr=buy_idr)
+
+                    # KONDISI 2: Sedang memegang posisi (Sangat Agresif: TP 0.3% atau SL -0.5% agar sering entry-exit cuan)
                     elif p_data["in_position"]:
-                        if current_price > highest_price:
-                            highest_price = current_price
+                        if p_data["buy_price"] > 0:
+                            price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
+                        else:
+                            price_change_pct = 0.0
 
-                        price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
-                        if price_change_pct >= 0.007 or price_change_pct <= -0.012:
+                        # Sengaja dibuat sensitif (0.3% naik atau -0.5% turun langsung cut/take profit demi kejar volume)
+                        if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_btc, current_usdt, _, _ = fetch_realtime_account()
                             target_amt = current_btc if pair_key == "btcidr" else current_usdt
                             
-                            if target_amt > 0.0001:
+                            if target_amt > 0.00001:
+                                add_log(pair_key, f"Mencoba SELL (Perubahan: {price_change_pct*100:.2f}%)")
                                 success_order, res_data = execute_real_order(pair_key, "sell", amount_coin=target_amt)
                                 if success_order:
                                     p_data["in_position"] = False
@@ -411,10 +400,11 @@ def pair_trading_worker(pair_key):
                                         p_data["losing_trades"] += 1
                                         p_data["daily_profit_idr"] -= abs(trade_profit)
                                         add_log(pair_key, f"SELL LOSS 🔻 ({price_change_pct*100:.2f}%)")
-                                    highest_price = 0.0
+                                else:
+                                    add_log(pair_key, f"Gagal Sell: {res_data}")
         except Exception as e:
             print(f"ENGINE ERROR {pair_key}:", e)
-        time.sleep(5)
+        time.sleep(3) # Cek lebih cepat agar super agresif
 
 def answer_callback(cb_id, text=""):
     telegram("answerCallbackQuery", {"callback_query_id": cb_id, "text": text, "show_alert": False})
@@ -467,16 +457,11 @@ def handle_update(update):
             answer_callback(cb_id, f"USDT Bot: {'Aktif' if p['is_running'] else 'Berhenti'}")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
 
-        elif data == "btn_split_usdt":
-            answer_callback(cb_id, "Memproses pemindahan saldo ke USDT...")
-            success, idr_cash, _, _, _, _ = fetch_realtime_account()
-            if idr_cash > 20000:
-                half_idr = (idr_cash / 2) * 0.995
-                success_order, res_data = execute_real_order("usdtidr", "buy", amount_idr=half_idr)
-                if success_order:
-                    add_log("usdtidr", f"Sukses memindahkan saldo ke USDT!")
-                else:
-                    add_log("usdtidr", f"Gagal pindah saldo: {res_data}")
+        elif data == "btn_liquidate":
+            answer_callback(cb_id, "Mencairkan seluruh aset ke IDR...")
+            success, _, btc_amt, usdt_amt, _, _ = fetch_realtime_account()
+            if btc_amt > 0.00001:
+                execute_real_order("btcidr", "sell", amount_coin=btc_amt)
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_home":
@@ -501,7 +486,7 @@ def handle_update(update):
             u = pairs_state["usdtidr"]
             total_prof = b['daily_profit_idr'] + u['daily_profit_idr']
             report_text = (
-                f"📈 *LAPORAN PERFORMA GLOBAL & HARIAN*\n\n"
+                f"📈 *LAPORAN PERFORMA AGRESIF*\n\n"
                 f"**BTC/IDR:**\n- Trade: {b['total_trades']}x | Win: {b['winning_trades']} | Lose: {b['losing_trades']}\n\n"
                 f"**USDT/IDR:**\n- Trade: {u['total_trades']}x | Win: {u['winning_trades']} | Lose: {u['losing_trades']}\n\n"
                 f"💰 *Estimasi Profit Hari Ini:* Rp {total_prof:,.2f}"
@@ -521,7 +506,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Polling Telegram Multi-Pair dimulai...")
+    print("Polling Telegram Aggressive Multi-Pair dimulai...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
@@ -533,10 +518,9 @@ def polling():
                     handle_update(upd)
         except Exception as e:
             print("POLLING ERROR:", e)
-            time.sleep(5)
+            time.sleep(3)
 
 if __name__ == "__main__":
-    threading.Thread(target=auto_split_and_convert_balance, daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("usdtidr",), daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
