@@ -277,7 +277,7 @@ def get_home_text():
     )
 
 def auto_refresh_dashboard_loop():
-    """Mengupdate pesan dashboard utama secara live (tanpa mengirim chat baru spam)"""
+    """Mengupdate pesan dashboard utama secara live"""
     while True:
         try:
             update_market_prices()
@@ -297,8 +297,35 @@ def auto_refresh_dashboard_loop():
             print("Auto Refresh Error:", e)
         time.sleep(1)
 
+def minute_report_worker():
+    """Mengirim laporan histori pergerakan ringkas setiap 1 menit sebagai chat baru (tetap seperti sebelumnya)"""
+    while True:
+        time.sleep(60)
+        if global_state["dashboard_chat_id"]:
+            try:
+                success, idr, btc, usdt, eq, _ = fetch_realtime_account()
+                b = pairs_state["btcidr"]
+                u = pairs_state["usdtidr"]
+                
+                report_msg = (
+                    f"⏱ *LAPORAN HISTORI PER MENIT* ({get_wib_time()})\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💰 Total Equity: Rp {eq:,.2f}\n"
+                    f"• BTC Price: Rp {b['last_market_price']:,.2f} ({b['price_trend']})\n"
+                    f"• USDT Price: Rp {u['last_market_price']:,.2f} ({u['price_trend']})\n"
+                    f"• BTC Trade/Win/Lose: {b['total_trades']}/{b['winning_trades']}/{b['losing_trades']}\n"
+                    f"• USDT Trade/Win/Lose: {u['total_trades']}/{u['winning_trades']}/{u['losing_trades']}"
+                )
+                telegram("sendMessage", {
+                    "chat_id": str(global_state["dashboard_chat_id"]),
+                    "text": report_msg,
+                    "parse_mode": "Markdown"
+                })
+            except Exception as e:
+                print("Minute Report Error:", e)
+
 def daily_midnight_report_worker():
-    """Mengirim rekap laporan otomatis khusus setiap pukul 00.00 WIB"""
+    """Rekap harian jam 00:00 WIB dengan format ringkas yang berbeda"""
     while True:
         now = datetime.now(WIB)
         if now.hour == 0 and now.minute == 0:
@@ -310,13 +337,16 @@ def daily_midnight_report_worker():
                 total_trades = b['total_trades'] + u['total_trades']
                 total_daily_profit = b['daily_profit_idr'] + u['daily_profit_idr']
 
+                # Format laporan tengah malam yang disesuaikan/berbeda
                 report_msg = (
-                    f"🌙 *REKAP LAPORAN HARIAN OTOMATIS (00:00 WIB)*\n"
-                    f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n\n"
-                    f"• Total Trade Hari Ini: {total_trades}x\n"
-                    f"• Win: {total_win} | Lose: {total_lose}\n"
-                    f"• **Estimasi Profit Harian: Rp {total_daily_profit:,.2f}**\n\n"
-                    f"_Bot siap melanjutkan sesi trading hari baru! Semoga Gacor!_"
+                    f"📌 *RINGKASAN GANTI HARI (00:00 WIB)*\n"
+                    f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n"
+                    f"──────────────────────\n"
+                    f"✔️ Total Aktivitas Trade: {total_trades}x\n"
+                    f"🏆 Menang / Kalah: {total_win} / {total_lose}\n"
+                    f"💵 Akumulasi P/L: Rp {total_daily_profit:,.2f}\n"
+                    f"──────────────────────\n"
+                    f"🚀 _Sesi trading baru dimulai, Semoga Gacor!_"
                 )
                 telegram("sendMessage", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
@@ -508,5 +538,6 @@ if __name__ == "__main__":
     threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("usdtidr",), daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
+    threading.Thread(target=minute_report_worker, daemon=True).start()
     threading.Thread(target=daily_midnight_report_worker, daemon=True).start()
     polling()
