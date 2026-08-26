@@ -20,7 +20,7 @@ def get_wib_time():
 # ==========================================
 # KONFIGURASI API & TOKEN
 # ==========================================
-TOKEN = "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U"
+TOKEN = "8867024450:AAGaZU1bZgT7RQZLS9SRvUJr6wxTpUFinGs"
 INDODAX_API_KEY = "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK".strip()
 INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b".strip()
 
