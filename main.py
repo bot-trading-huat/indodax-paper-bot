@@ -27,6 +27,7 @@ INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de
 # TARGET HARIAN & SAFETY LIMIT
 DAILY_PROFIT_TARGET = 200000.0
 MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
+MIN_IDR_RESERVE = 15000.0 # Saldo IDR minimal yang wajib disisakan (tidak di-all-in kan)
 
 global_state = {
     "dashboard_chat_id": None,
@@ -51,7 +52,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE OTOMATIS & SAFETY 3% AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE AMAN & CADANGAN 15K AKTIF !!"], maxlen=4),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -66,7 +67,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE OTOMATIS & SAFETY 3% AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE AMAN & CADANGAN 15K AKTIF !!"], maxlen=4),
     }
 }
 
@@ -84,8 +85,8 @@ def telegram(method, params=None):
 def add_log(pair_key, text):
     timestamp = get_wib_time()
     p_logs = pairs_state[pair_key]["minute_logs"]
-    if len(p_logs) == 0 or "MODE OTOMATIS" in p_logs[0]:
-        p_logs.appendleft("KEJAR TARGET 200K !!")
+    if len(p_logs) == 0 or "MODE AMAN" in p_logs[0]:
+        p_logs.appendleft("KEJAR TARGET 200K dengan CADANGAN AMAN !!")
     p_logs.append(f"[{timestamp}] {text}")
 
 def update_market_prices():
@@ -162,7 +163,6 @@ def fetch_realtime_account():
         return False, 0.0, 0.0, 0.0, 0.0, str(e)
 
 def check_initial_positions():
-    """Fungsi untuk mendeteksi koin yang sudah ada di wallet saat bot pertama kali dinyalakan"""
     success, _, btc_amt, usdt_amt, _, _ = fetch_realtime_account()
     if success:
         if btc_amt > 0.00001:
@@ -246,9 +246,9 @@ def get_home_text(is_final=False):
             header_status = f"☕ ISTIRAHAT COOLING DOWN ({sisa_waktu}s)"
         else:
             global_state["is_resting"] = False
-            header_status = "🔥 TARGET 200RB/DAY"
+            header_status = "🔥 TARGET 200RB/DAY (CADANGAN AMAN)"
     else:
-        header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY"
+        header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY (CADANGAN AMAN)"
 
     total_prof_today = pairs_state["btcidr"]["daily_profit_idr"] + pairs_state["usdtidr"]["daily_profit_idr"]
     target_progress = f"🎯 Profit Hari Ini: Rp {total_prof_today:,.0f} / Rp {DAILY_PROFIT_TARGET:,.0f}"
@@ -258,7 +258,7 @@ def get_home_text(is_final=False):
     btc_price = btc_p["last_market_price"]
     btc_chart = "".join(btc_p["chart_chars"])
     btc_val = btc_amt * btc_price
-    btc_pos = f"All-In Aset ({btc_amt:.6f} BTC)" if btc_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
+    btc_pos = f"Aset Koin ({btc_amt:.6f} BTC)" if btc_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
     btc_logs = "\n".join(btc_p["minute_logs"])
 
     usdt_p = pairs_state["usdtidr"]
@@ -266,7 +266,7 @@ def get_home_text(is_final=False):
     usdt_price = usdt_p["last_market_price"]
     usdt_chart = "".join(usdt_p["chart_chars"])
     usdt_val = usdt_amt * usdt_price
-    usdt_pos = f"All-In Aset ({usdt_amt:,.2f} USDT)" if usdt_p["in_position"] else f"USDT Ready ({usdt_amt:,.2f} USDT)"
+    usdt_pos = f"Aset Koin ({usdt_amt:,.2f} USDT)" if usdt_p["in_position"] else f"USDT Ready ({usdt_amt:,.2f} USDT)"
     usdt_logs = "\n".join(usdt_p["minute_logs"])
 
     return (
@@ -424,24 +424,19 @@ def pair_trading_worker(pair_key):
 
                 if success and current_price > 0:
                     if not p_data["in_position"]:
-                        if pair_key == "btcidr" and idr_cash >= 10000:
-                            buy_idr = idr_cash  
-                            add_log(pair_key, f"ALL-IN BUY BTC Rp {buy_idr:,.0f}...")
-                            success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=buy_idr)
+                        # Hanya beli jika sisa IDR setelah dikurangi cadangan masih mencukupi minimal Rp 10.000
+                        allowed_buy_idr = idr_cash - MIN_IDR_RESERVE
+                        if allowed_buy_idr >= 10000:
+                            add_log(pair_key, f"BUY dengan dana Rp {allowed_buy_idr:,.0f} (Cadangan Rp {MIN_IDR_RESERVE:,.0f} disisakan)...")
+                            success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=allowed_buy_idr)
                             if success_order:
                                 p_data["buy_price"] = current_price
                                 p_data["in_position"] = True
-                                add_log(pair_key, f"ALL-IN BUY SUKSES @ Rp {current_price:,.0f}")
+                                add_log(pair_key, f"BUY SUKSES @ Rp {current_price:,.0f}")
                             else:
-                                add_log(pair_key, f"Gagal All-In Buy: {res_data}")
-
-                        elif pair_key == "usdtidr" and idr_cash >= 10000:
-                            buy_idr = idr_cash  
-                            add_log(pair_key, f"ALL-IN BUY USDT Rp {buy_idr:,.0f}...")
-                            execute_real_order(pair_key, "buy", amount_idr=buy_idr)
+                                add_log(pair_key, f"Gagal Buy: {res_data}")
 
                     elif p_data["in_position"]:
-                        # Jika sudah punya posisi (atau terdeteksi koin di wallet), cek target profit/loss untuk dijual otomatis
                         if p_data["buy_price"] <= 0:
                             p_data["buy_price"] = current_price
 
@@ -452,7 +447,7 @@ def pair_trading_worker(pair_key):
                             target_amt = current_btc if pair_key == "btcidr" else current_usdt
                             
                             if target_amt > 0.00001:
-                                add_log(pair_key, f"Mencoba SELL ALL-IN ({price_change_pct*100:.2f}%)")
+                                add_log(pair_key, f"Mencoba SELL ({price_change_pct*100:.2f}%)")
                                 success_order, res_data = execute_real_order(pair_key, "sell", amount_coin=target_amt)
                                 if success_order:
                                     p_data["in_position"] = False
@@ -578,7 +573,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot Final Otomatis & Sinkronisasi Saldo Berjalan...")
+    print("Bot Final dengan Proteksi Cadangan Saldo IDR Berjalan...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
@@ -593,7 +588,6 @@ def polling():
             time.sleep(3)
 
 if __name__ == "__main__":
-    # Cek posisi koin saat pertama kali bot menyala
     update_market_prices()
     check_initial_positions()
 
