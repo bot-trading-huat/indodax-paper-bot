@@ -248,7 +248,7 @@ def get_home_text():
     return (
         f"💰 TOTAL EQUITY: Rp {total_equity:,.2f}\n"
         f"Jam : ⏱ {now_wib}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"1️⃣ BTC/IDR | {btc_p['price_trend']}\n"
         f"Status: {btc_status}\n"
         f"• Harga: Rp {btc_price:,.2f}\n"
@@ -258,7 +258,7 @@ def get_home_text():
         f"📊 REKAP BTC: Trade: {btc_p['total_trades']}x | Win: {btc_p['winning_trades']} | Lose: {btc_p['losing_trades']}\n"
         f"📋 LOG BTC:\n"
         f"```text\n{btc_logs}\n```\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"2️⃣ USDT/IDR | {usdt_p['price_trend']}\n"
         f"Status: {usdt_status}\n"
         f"• Harga: Rp {usdt_price:,.2f}\n"
