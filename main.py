@@ -37,7 +37,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["siap..."], maxlen=5),
+        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=5),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -51,7 +51,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["USDT siap..."], maxlen=5),
+        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=5),
     }
 }
 
@@ -251,8 +251,8 @@ def get_home_text():
         f"• Grafik: {btc_chart}\n"
         f"• Posisi: {btc_pos}\n"
         f"📊 REKAP BTC: Trade: {btc_p['total_trades']}x | Win: {btc_p['winning_trades']} | Lose: {btc_p['losing_trades']}\n"
-        f"📋 LOG BTC:\n\n"
-        f"{btc_logs}\n"
+        f"📋 LOG BTC:\n"
+        f"```{btc_logs}```\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"2️⃣ USDT/IDR | {usdt_p['price_trend']}\n"
         f"Status: {usdt_status}\n"
@@ -261,8 +261,8 @@ def get_home_text():
         f"• Grafik: {usdt_chart}\n"
         f"• Posisi: {usdt_pos}\n"
         f"📊 REKAP USDT: Trade: {usdt_p['total_trades']}x | Win: {usdt_p['winning_trades']} | Lose: {usdt_p['losing_trades']}\n"
-        f"📋 LOG USDT:\n\n"
-        f"{usdt_logs}"
+        f"📋 LOG USDT:\n"
+        f"```{usdt_logs}```"
     )
 
 def auto_refresh_dashboard_loop():
