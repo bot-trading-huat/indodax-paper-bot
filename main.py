@@ -18,12 +18,12 @@ def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
-# KONFIGURASI API & BOT
+# KONFIGURASI API & BOT (DIUBAH KE USDT)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
 INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK").strip()
 INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b").strip()
-PAIR = "btcidr"
+PAIR = "btcusdt"  # Diubah dari btcidr ke btcusdt
 
 state = {
     "is_running": False,
@@ -127,15 +127,16 @@ def fetch_realtime_account():
                 balances = res.get("return", {}).get("balance", {})
                 balances_hold = res.get("return", {}).get("balance_hold", {})
                 
-                idr_cash = float(balances.get("idr", 0))
-                idr_hold = float(balances_hold.get("idr", 0))
-                total_idr = idr_cash + idr_hold
+                # Mengambil saldo USDT
+                usdt_cash = float(balances.get("usdt", 0))
+                usdt_hold = float(balances_hold.get("usdt", 0))
+                total_usdt = usdt_cash + usdt_hold
                 
                 btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
-                btc_val = btc_amt * price
-                grand_total = total_idr + btc_val
+                btc_val_usdt = btc_amt * price
+                grand_total = total_usdt + btc_val_usdt
                 
-                return True, idr_cash, btc_amt, grand_total, price, "OK"
+                return True, usdt_cash, btc_amt, grand_total, price, "OK"
             else:
                 return False, 0.0, 0.0, 0.0, price, res.get("error", "API Error")
     except Exception as e:
@@ -171,14 +172,14 @@ def get_back_keyboard():
 # DASHBOARD TEXT BUILDER
 # ==========================================
 def get_home_text(is_final=False):
-    success, idr_bal, btc_amt, total_equity, price, err = fetch_realtime_account()
+    success, usdt_bal, btc_amt, total_equity, price, err = fetch_realtime_account()
     if not success:
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
     status_str = "🟢 Aktif 🔘" if state["is_running"] else "🔴 Berhenti 🔘"
     now_wib = get_wib_time()
 
-    pos_info = f"• Posisi: Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else f"• Posisi: IDR Ready (Rp {idr_bal:,.0f})"
+    pos_info = f"• Posisi: Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else f"• Posisi: USDT Ready ($ {usdt_bal:,.2f})"
     chart_str = generate_block_chart()
     asset_val = btc_amt * price
 
@@ -190,14 +191,14 @@ def get_home_text(is_final=False):
 
     if is_final:
         profit_loss_minute = total_equity - state["minute_start_equity"]
-        profit_str = f"Rp {profit_loss_minute:+,.2f}"
+        profit_str = f"$ {profit_loss_minute:+,.2f}"
 
         return (
-            f"🔹 *BTC/IDR* {status_str} {state['price_trend']}\n"
-            f"• Harga BTC: Rp {price:,.2f}\n"
-            f"• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n"
-            f"• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n"
-            f"• *Total Keseluruhan (Equity): Rp {total_equity:,.2f}*\n"
+            f"🔹 *BTC/USDT* {status_str} {state['price_trend']}\n"
+            f"• Harga BTC: $ {price:,.2f}\n"
+            f"• Saldo USDT Tunai: $ {usdt_bal:,.2f}\n"
+            f"• Nilai Aset BTC: $ {asset_val:,.2f} ({btc_amt:.8f} BTC)\n"
+            f"• *Total Keseluruhan (Equity): $ {total_equity:,.2f}*\n"
             f"• Grafik: `{chart_str}`\n"
             f"{pos_info}\n"
             f"⏱ _Waktu Selesai: {now_wib} WIB_\n\n"
@@ -209,11 +210,11 @@ def get_home_text(is_final=False):
         )
 
     return (
-        f"🔹 *BTC/IDR* {status_str} {state['price_trend']}\n"
-        f"• Harga BTC: Rp {price:,.2f}\n"
-        f"• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n"
-        f"• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n"
-        f"• *Total Keseluruhan (Equity): Rp {total_equity:,.2f}*\n"
+        f"🔹 *BTC/USDT* {status_str} {state['price_trend']}\n"
+        f"• Harga BTC: $ {price:,.2f}\n"
+        f"• Saldo USDT Tunai: $ {usdt_bal:,.2f}\n"
+        f"• Nilai Aset BTC: $ {asset_val:,.2f} ({btc_amt:.8f} BTC)\n"
+        f"• *Total Keseluruhan (Equity): $ {total_equity:,.2f}*\n"
         f"• Grafik: `{chart_str}`\n"
         f"{pos_info}\n\n"
         f"📊 *REKAP PERFORMA:*\n"
@@ -304,7 +305,7 @@ def minutely_reset_loop():
 # ==========================================
 # ENGINE TRADING (JEDA 10 DETIK)
 # ==========================================
-def execute_real_order(side, amount_idr=0, amount_btc=0):
+def execute_real_order(side, amount_usdt=0, amount_btc=0):
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
     params = {
@@ -314,7 +315,7 @@ def execute_real_order(side, amount_idr=0, amount_btc=0):
         "nonce": nonce
     }
     if side == "buy":
-        params["idr"] = int(amount_idr)
+        params["usdt"] = f"{amount_usdt:.8f}"
     else:
         params["btc"] = f"{amount_btc:.8f}"
 
@@ -343,26 +344,26 @@ def trading_loop():
     while True:
         try:
             if state["is_running"]:
-                success, idr_cash, btc_amt, total_equity, current_price, err = fetch_realtime_account()
+                success, usdt_cash, btc_amt, total_equity, current_price, err = fetch_realtime_account()
 
                 if success and current_price > 0:
                     if not state["in_position"]:
-                        if idr_cash >= 10000: 
-                            buy_idr = idr_cash * 0.995 
-                            add_log(f"Mencoba BUY BTC dg Rp {buy_idr:,.0f}...")
-                            success_order, res_data = execute_real_order("buy", amount_idr=buy_idr)
+                        if usdt_cash >= 1:  # Minimal threshold $1 USDT
+                            buy_usdt = usdt_cash * 0.995 
+                            add_log(f"Mencoba BUY BTC dg $ {buy_usdt:,.2f}...")
+                            success_order, res_data = execute_real_order("buy", amount_usdt=buy_usdt)
                             
                             if success_order:
                                 state["buy_price"] = current_price
                                 highest_price = current_price
                                 state["in_position"] = True
-                                add_log(f"BUY BERHASIL @ Rp {current_price:,.0f}")
+                                add_log(f"BUY BERHASIL @ $ {current_price:,.2f}")
                             else:
                                 add_log(f"Gagal BUY: {res_data}")
                         else:
-                            warning_msg = f"IDR Tunai Rp {idr_cash:,.0f} (< Rp 10k)"
+                            warning_msg = f"USDT Tunai $ {usdt_cash:,.2f} (< $1)"
                             if not any(warning_msg in log for log in state["minute_logs"]):
-                                add_log(f"Peringatan: Saldo IDR Tunai kurang.")
+                                add_log(f"Peringatan: Saldo USDT Tunai kurang.")
 
                     elif state["in_position"]:
                         if current_price > highest_price:
@@ -383,19 +384,19 @@ def trading_loop():
                                 success_order, res_data = execute_real_order("sell", amount_btc=current_btc_amt)
                                 
                                 if success_order:
-                                    pnl_idr = (current_btc_amt * current_price) - (current_btc_amt * state["buy_price"])
+                                    pnl_usdt = (current_btc_amt * current_price) - (current_btc_amt * state["buy_price"])
                                     state["in_position"] = False
                                     state["total_trades"] += 1
                                     highest_price = 0.0
 
-                                    if pnl_idr > 0:
+                                    if pnl_usdt > 0:
                                         state["winning_trades"] += 1
                                         state["minute_wins"] += 1
-                                        add_log(f"SELL PROFIT 🔺 @ Rp {current_price:,.0f} (+Rp {pnl_idr:,.0f})")
+                                        add_log(f"SELL PROFIT 🔺 @ $ {current_price:,.2f} (+$ {pnl_usdt:,.2f})")
                                     else:
                                         state["losing_trades"] += 1
                                         state["minute_losses"] += 1
-                                        add_log(f"SELL LOSS 🔻 @ Rp {current_price:,.0f} (-Rp {abs(pnl_idr):,.0f})")
+                                        add_log(f"SELL LOSS 🔻 @ $ {current_price:,.2f} (-$ {abs(pnl_usdt):,.2f})")
                                 else:
                                     add_log(f"Gagal SELL: {res_data}")
 
@@ -408,19 +409,19 @@ def trading_loop():
 # TELEGRAM HANDLER
 # ==========================================
 def get_status_text():
-    success, idr_bal, btc_amt, _, price, _ = fetch_realtime_account()
+    success, usdt_bal, btc_amt, _, price, _ = fetch_realtime_account()
     status_str = "🟢 Aktif 🔘" if state["is_running"] else "🔴 Berhenti 🔘"
-    pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
-    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/IDR\n• Harga BTC saat ini: Rp {price:,.0f}\n• IDR Tunai: Rp {idr_bal:,.2f}\n• Posisi: {pos}"
+    pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if state["in_position"] else f"USDT Ready ($ {usdt_bal:,.2f})"
+    return f"📊 *STATUS BOT*\n\n• Mode Bot: {status_str}\n• Pair: BTC/USDT\n• Harga BTC saat ini: $ {price:,.2f}\n• USDT Tunai: $ {usdt_bal:,.2f}\n• Posisi: {pos}"
 
 def get_balance_text():
-    success, idr_bal, btc_amt, equity, price, _ = fetch_realtime_account()
+    success, usdt_bal, btc_amt, equity, price, _ = fetch_realtime_account()
     asset_val = btc_amt * price
-    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo IDR Tunai: Rp {idr_bal:,.2f}\n• Nilai Aset BTC: Rp {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Keseluruhan (Equity): Rp {equity:,.2f}"
+    return f"💰 *SALDO AKUN INDODAX*\n\n• Saldo USDT Tunai: $ {usdt_bal:,.2f}\n• Nilai Aset BTC: $ {asset_val:,.2f} ({btc_amt:.8f} BTC)\n• Total Keseluruhan (Equity): $ {equity:,.2f}"
 
 def get_report_text():
     success, _, _, equity, price, _ = fetch_realtime_account()
-    return f"📈 *LAPORAN PERFORMA*\n\n• Total Keseluruhan (Equity): Rp {equity:,.2f}\n• Total Trade: {state['total_trades']}x\n• Total Win: {state['winning_trades']} | Total Lose: {state['losing_trades']}"
+    return f"📈 *LAPORAN PERFORMA*\n\n• Total Keseluruhan (Equity): $ {equity:,.2f}\n• Total Trade: {state['total_trades']}x\n• Total Win: {state['winning_trades']} | Total Lose: {state['losing_trades']}"
 
 def answer_callback(cb_id, text=""):
     telegram("answerCallbackQuery", {"callback_query_id": cb_id, "text": text, "show_alert": False})
@@ -486,7 +487,7 @@ def handle_update(update):
         elif data == "btn_price":
             answer_callback(cb_id)
             price = get_indodax_price() or 0
-            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\nBTC/IDR: Rp {price:,.0f}", is_home=False)
+            update_menu(chat_id, msg_id, f"⚡ *HARGA REAL-TIME*\n\nBTC/USDT: $ {price:,.2f}", is_home=False)
         else:
             answer_callback(cb_id)
         return
