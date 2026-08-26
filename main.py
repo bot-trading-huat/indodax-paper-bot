@@ -24,43 +24,50 @@ TOKEN = "8867024450:AAGaZU1bZgT7RQZLS9SRvUJr6wxTpUFinGs"
 INDODAX_API_KEY = "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK".strip()
 INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b".strip()
 
-pairs_state = {
-    "btcidr": {
-        "name": "BTC/IDR",
-        "symbol": "btc",
-        "is_running": True,  # Otomatis aktif saat bot dinyalakan agar langsung gas
-        "in_position": False,
-        "buy_price": 0.0,
-        "total_trades": 0,
-        "winning_trades": 0,
-        "losing_trades": 0,
-        "daily_profit_idr": 0.0,
-        "last_market_price": 0.0,
-        "price_trend": "⏺",
-        "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["BOT AGRESIF DIMULAI !!"], maxlen=4),
-    },
-    "usdtidr": {
-        "name": "USDT/IDR",
-        "symbol": "usdt",
-        "is_running": True,  # Otomatis aktif
-        "in_position": False,
-        "buy_price": 0.0,
-        "total_trades": 0,
-        "winning_trades": 0,
-        "losing_trades": 0,
-        "daily_profit_idr": 0.0,
-        "last_market_price": 0.0,
-        "price_trend": "⏺",
-        "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["BOT AGRESIF DIMULAI !!"], maxlen=4),
-    }
-}
+# TARGET HARIAN & SAFETY LIMIT
+DAILY_PROFIT_TARGET = 200000.0
+MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat 5 menit
 
 global_state = {
     "dashboard_chat_id": None,
     "last_active_msg_id": None,
-    "last_rendered_text": ""
+    "last_rendered_text": "",
+    "is_resting": False,
+    "rest_until": 0.0,
+    "peak_equity": 0.0
+}
+
+pairs_state = {
+    "btcidr": {
+        "name": "BTC/IDR",
+        "symbol": "btc",
+        "is_running": True,
+        "in_position": False,
+        "buy_price": 0.0,
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "daily_profit_idr": 0.0,
+        "last_market_price": 0.0,
+        "price_trend": "⏺",
+        "chart_chars": deque(["—"]*10, maxlen=10),
+        "minute_logs": deque(["🔥 MODE ALL-IN & SAFETY 3% AKTIF !!"], maxlen=4),
+    },
+    "usdtidr": {
+        "name": "USDT/IDR",
+        "symbol": "usdt",
+        "is_running": True,
+        "in_position": False,
+        "buy_price": 0.0,
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "daily_profit_idr": 0.0,
+        "last_market_price": 0.0,
+        "price_trend": "⏺",
+        "chart_chars": deque(["—"]*10, maxlen=10),
+        "minute_logs": deque(["🔥 MODE ALL-IN & SAFETY 3% AKTIF !!"], maxlen=4),
+    }
 }
 
 def telegram(method, params=None):
@@ -77,8 +84,8 @@ def telegram(method, params=None):
 def add_log(pair_key, text):
     timestamp = get_wib_time()
     p_logs = pairs_state[pair_key]["minute_logs"]
-    if len(p_logs) == 0 or "BOT AGRESIF" in p_logs[0]:
-        p_logs.appendleft("GACOR TERUS !!")
+    if len(p_logs) == 0 or "MODE ALL-IN" in p_logs[0]:
+        p_logs.appendleft("KEJAR TARGET 200K !!")
     p_logs.append(f"[{timestamp}] {text}")
 
 def update_market_prices():
@@ -87,7 +94,7 @@ def update_market_prices():
             ts = int(time.time() * 1000)
             url = f"https://indodax.com/api/ticker/{pair_key}?ts={ts}"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 price = float(data.get("ticker", {}).get("last", 0))
                 
@@ -129,7 +136,7 @@ def fetch_realtime_account():
 
     try:
         req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             if res.get("success") == 1:
                 balances = res.get("return", {}).get("balance", {})
@@ -143,6 +150,11 @@ def fetch_realtime_account():
                 usdt_val = usdt_amt * pairs_state["usdtidr"]["last_market_price"]
                 
                 grand_total = idr_cash + btc_val + usdt_val
+                
+                # Inisialisasi atau perbarui peak equity tertinggi untuk deteksi drawdown
+                if global_state["peak_equity"] == 0.0 or grand_total > global_state["peak_equity"]:
+                    global_state["peak_equity"] = grand_total
+                    
                 return True, idr_cash, btc_amt, usdt_amt, grand_total, "OK"
             else:
                 return False, 0.0, 0.0, 0.0, 0.0, res.get("error", "API Error")
@@ -174,7 +186,7 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     }
     try:
         req = urllib.request.Request(url, data=post_data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             if res.get("success") == 1:
                 return True, res.get("return", {})
@@ -211,34 +223,40 @@ def get_home_text(is_final=False):
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
     now_wib = get_wib_time()
-    header_status = "🏁 FINAL" if is_final else "🔥 AGGRESSIVE LIVE DASHBOARD"
+    
+    if global_state["is_resting"]:
+        sisa_waktu = int(global_state["rest_until"] - time.time())
+        if sisa_waktu > 0:
+            header_status = f"☕ ISTIRAHAT COOLING DOWN ({sisa_waktu}s)"
+        else:
+            global_state["is_resting"] = False
+            header_status = "🔥 ALL-IN TARGET 200RB/DAY"
+    else:
+        header_status = "🏁 FINAL" if is_final else "🔥 ALL-IN TARGET 200RB/DAY"
 
-    # 1. DATA BTC
+    total_prof_today = pairs_state["btcidr"]["daily_profit_idr"] + pairs_state["usdtidr"]["daily_profit_idr"]
+    target_progress = f"🎯 Profit Hari Ini: Rp {total_prof_today:,.0f} / Rp {DAILY_PROFIT_TARGET:,.0f}"
+
     btc_p = pairs_state["btcidr"]
     btc_status = "🟢 Aktif" if btc_p["is_running"] else "🔴 Berhenti"
     btc_price = btc_p["last_market_price"]
     btc_chart = "".join(btc_p["chart_chars"])
     btc_val = btc_amt * btc_price
-    
-    if btc_p["in_position"]:
-        btc_pos = f"Memegang Aset ({btc_amt:.6f} BTC)"
-    else:
-        btc_pos = f"IDR Ready (Rp {idr_bal:,.0f})"
-        
+    btc_pos = f"All-In Aset ({btc_amt:.6f} BTC)" if btc_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
     btc_logs = "\n".join(btc_p["minute_logs"])
 
-    # 2. DATA USDT
     usdt_p = pairs_state["usdtidr"]
     usdt_status = "🟢 Aktif" if usdt_p["is_running"] else "🔴 Berhenti"
     usdt_price = usdt_p["last_market_price"]
     usdt_chart = "".join(usdt_p["chart_chars"])
     usdt_val = usdt_amt * usdt_price
-    usdt_pos = f"Memegang Aset ({usdt_amt:,.2f} USDT)" if usdt_p["in_position"] else f"USDT Ready ({usdt_amt:,.2f} USDT)"
+    usdt_pos = f"All-In Aset ({usdt_amt:,.2f} USDT)" if usdt_p["in_position"] else f"USDT Ready ({usdt_amt:,.2f} USDT)"
     usdt_logs = "\n".join(usdt_p["minute_logs"])
 
     return (
         f"{header_status}\n"
         f"💰 TOTAL EQUITY: Rp {total_equity:,.2f}\n"
+        f"{target_progress}\n"
         f"Jam : ⏱ {now_wib}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"1️⃣ BTC/IDR | {btc_p['price_trend']}\n"
@@ -283,7 +301,6 @@ def auto_refresh_dashboard_loop():
         time.sleep(2)
 
 def minute_report_worker():
-    """Setiap 1 menit: Menandai chat aktif lama menjadi FINAL, lalu mengirim chat baru di bawahnya"""
     while True:
         time.sleep(60)
         if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
@@ -293,8 +310,7 @@ def minute_report_worker():
                     "chat_id": str(global_state["dashboard_chat_id"]),
                     "message_id": global_state["last_active_msg_id"],
                     "text": final_text,
-                    "parse_mode": "Markdown",
-                    "reply_markup": get_main_keyboard()
+                    "parse_mode": "Markdown"
                 })
 
                 new_live_text = get_home_text(is_final=False)
@@ -322,13 +338,16 @@ def daily_midnight_report_worker():
                 total_trades = b['total_trades'] + u['total_trades']
                 total_daily_profit = b['daily_profit_idr'] + u['daily_profit_idr']
 
+                status_target = "✅ TARGET HARI INI TERCAPAI!" if total_daily_profit >= DAILY_PROFIT_TARGET else "⚠️ BELUM MENCAPAI TARGET"
+
                 report_msg = (
                     f"🌙 *REKAP HARIAN (00:00 WIB)*\n"
                     f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n\n"
                     f"• Total Trade: {total_trades}x\n"
                     f"• Win: {total_win} | Lose: {total_lose}\n"
-                    f"• **Profit Harian: Rp {total_daily_profit:,.2f}**\n\n"
-                    f"_Bot melanjutkan sesi hari baru! Gacor Terus!_"
+                    f"• **Total Profit: Rp {total_daily_profit:,.2f}**\n"
+                    f"• Status: {status_target}\n\n"
+                    f"_Bot mereset siklus profit untuk hari baru! Gas terus!_"
                 )
                 telegram("sendMessage", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
@@ -339,6 +358,7 @@ def daily_midnight_report_worker():
                 u['daily_profit_idr'] = 0.0
                 b['total_trades'] = 0; b['winning_trades'] = 0; b['losing_trades'] = 0
                 u['total_trades'] = 0; u['winning_trades'] = 0; u['losing_trades'] = 0
+                global_state["peak_equity"] = 0.0
             time.sleep(65)
         time.sleep(15)
 
@@ -347,45 +367,68 @@ def pair_trading_worker(pair_key):
 
     while True:
         try:
+            # Cek apakah bot sedang dalam masa istirahat 3% drawdown
+            if global_state["is_resting"]:
+                if time.time() >= global_state["rest_until"]:
+                    global_state["is_resting"] = False
+                    add_log(pair_key, "Selesai istirahat 5 menit. Bot aktif kembali!")
+                    # Reset peak equity agar mulai acuan baru setelah istirahat
+                    success, _, _, _, current_eq, _ = fetch_realtime_account()
+                    if success:
+                        global_state["peak_equity"] = current_eq
+                else:
+                    time.sleep(5)
+                    continue
+
             if p_data["is_running"]:
-                success, idr_cash, btc_amt, usdt_amt, _, err = fetch_realtime_account()
+                success, idr_cash, btc_amt, usdt_amt, current_equity, err = fetch_realtime_account()
                 current_price = p_data["last_market_price"]
 
+                # Cek Penurunan Saldo (Drawdown) Total >= 3% dari Peak Equity
+                if global_state["peak_equity"] > 0 and current_equity < global_state["peak_equity"]:
+                    drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
+                    if drawdown >= MAX_DRAWDOWN_PCT:
+                        global_state["is_resting"] = True
+                        global_state["rest_until"] = time.time() + 300  # Istirahat 300 detik (5 menit)
+                        
+                        # Coba cairkan posisi darurat jika sedang memegang koin agar aman
+                        if p_data["in_position"]:
+                            target_amt = btc_amt if pair_key == "btcidr" else usdt_amt
+                            if target_amt > 0.00001:
+                                execute_real_order(pair_key, "sell", amount_coin=target_amt)
+                                p_data["in_position"] = False
+                        
+                        add_log(pair_key, f"⚠️ DRAWDOWN {drawdown*100:.2f}%! Istirahat 5 menit diaktifkan.")
+                        time.sleep(5)
+                        continue
+
                 if success and current_price > 0:
-                    # KONDISI 1: Belum punya posisi, cari peluang beli secara agresif (minimal sisa IDR Rp 10.000)
                     if not p_data["in_position"]:
                         if pair_key == "btcidr" and idr_cash >= 10000:
-                            buy_idr = idr_cash * 0.98  # Pakai hampir seluruh IDR cash demi agresif
-                            add_log(pair_key, f"Agresif BUY BTC Rp {buy_idr:,.0f}...")
+                            buy_idr = idr_cash  # ALL-IN 100% Saldo IDR
+                            add_log(pair_key, f"ALL-IN BUY BTC Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=buy_idr)
                             if success_order:
                                 p_data["buy_price"] = current_price
                                 p_data["in_position"] = True
-                                add_log(pair_key, f"BUY SUKSES @ Rp {current_price:,.0f}")
+                                add_log(pair_key, f"ALL-IN BUY SUKSES @ Rp {current_price:,.0f}")
                             else:
-                                add_log(pair_key, f"Gagal Buy: {res_data}")
+                                add_log(pair_key, f"Gagal All-In Buy: {res_data}")
 
-                        elif pair_key == "usdtidr":
-                            # Jika ada IDR sisa tapi mau main di USDT/IDR
-                            if idr_cash >= 10000:
-                                buy_idr = idr_cash * 0.98
-                                add_log(pair_key, f"Agresif BUY USDT dengan Rp {buy_idr:,.0f}...")
-                                execute_real_order(pair_key, "buy", amount_idr=buy_idr)
+                        elif pair_key == "usdtidr" and idr_cash >= 10000:
+                            buy_idr = idr_cash  # ALL-IN 100% Saldo IDR ke USDT
+                            add_log(pair_key, f"ALL-IN BUY USDT Rp {buy_idr:,.0f}...")
+                            execute_real_order(pair_key, "buy", amount_idr=buy_idr)
 
-                    # KONDISI 2: Sedang memegang posisi (Sangat Agresif: TP 0.3% atau SL -0.5% agar sering entry-exit cuan)
                     elif p_data["in_position"]:
-                        if p_data["buy_price"] > 0:
-                            price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
-                        else:
-                            price_change_pct = 0.0
+                        price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"] if p_data["buy_price"] > 0 else 0.0
 
-                        # Sengaja dibuat sensitif (0.3% naik atau -0.5% turun langsung cut/take profit demi kejar volume)
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_btc, current_usdt, _, _ = fetch_realtime_account()
                             target_amt = current_btc if pair_key == "btcidr" else current_usdt
                             
                             if target_amt > 0.00001:
-                                add_log(pair_key, f"Mencoba SELL (Perubahan: {price_change_pct*100:.2f}%)")
+                                add_log(pair_key, f"Mencoba SELL ALL-IN ({price_change_pct*100:.2f}%)")
                                 success_order, res_data = execute_real_order(pair_key, "sell", amount_coin=target_amt)
                                 if success_order:
                                     p_data["in_position"] = False
@@ -404,7 +447,7 @@ def pair_trading_worker(pair_key):
                                     add_log(pair_key, f"Gagal Sell: {res_data}")
         except Exception as e:
             print(f"ENGINE ERROR {pair_key}:", e)
-        time.sleep(3) # Cek lebih cepat agar super agresif
+        time.sleep(2)
 
 def answer_callback(cb_id, text=""):
     telegram("answerCallbackQuery", {"callback_query_id": cb_id, "text": text, "show_alert": False})
@@ -458,7 +501,7 @@ def handle_update(update):
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
 
         elif data == "btn_liquidate":
-            answer_callback(cb_id, "Mencairkan seluruh aset ke IDR...")
+            answer_callback(cb_id, "Memaksa cairkan seluruh aset ke IDR...")
             success, _, btc_amt, usdt_amt, _, _ = fetch_realtime_account()
             if btc_amt > 0.00001:
                 execute_real_order("btcidr", "sell", amount_coin=btc_amt)
@@ -476,7 +519,8 @@ def handle_update(update):
                 f"• IDR Tunai: Rp {idr:,.2f}\n"
                 f"• Saldo BTC: {btc:.6f} BTC\n"
                 f"• Saldo USDT: {usdt:,.2f} USDT\n"
-                f"• **TOTAL KESELURUHAN (EQUITY): Rp {eq:,.2f}**"
+                f"• **TOTAL KESELURUHAN (EQUITY): Rp {eq:,.2f}**\n"
+                f"• **Peak Equity Hari Ini:** Rp {global_state['peak_equity']:,.2f}"
             )
             update_menu(chat_id, msg_id, status_text, is_home=False)
             
@@ -486,10 +530,12 @@ def handle_update(update):
             u = pairs_state["usdtidr"]
             total_prof = b['daily_profit_idr'] + u['daily_profit_idr']
             report_text = (
-                f"📈 *LAPORAN PERFORMA AGRESIF*\n\n"
-                f"**BTC/IDR:**\n- Trade: {b['total_trades']}x | Win: {b['winning_trades']} | Lose: {b['losing_trades']}\n\n"
-                f"**USDT/IDR:**\n- Trade: {u['total_trades']}x | Win: {u['winning_trades']} | Lose: {u['losing_trades']}\n\n"
-                f"💰 *Estimasi Profit Hari Ini:* Rp {total_prof:,.2f}"
+                f"📈 *LAPORAN TARGET PROFIT HARIAN*\n\n"
+                f"• Target Wajib: Rp {DAILY_PROFIT_TARGET:,.2f}\n"
+                f"• Profit Tercapai: Rp {total_prof:,.2f}\n"
+                f"• Status: {'TERCAPAI 🎉' if total_prof >= DAILY_PROFIT_TARGET else 'BELUM TERCAPAI ⚠️'}\n\n"
+                f"**BTC/IDR:** Trade: {b['total_trades']}x | Win: {b['winning_trades']} | Lose: {b['losing_trades']}\n"
+                f"**USDT/IDR:** Trade: {u['total_trades']}x | Win: {u['winning_trades']} | Lose: {u['losing_trades']}"
             )
             update_menu(chat_id, msg_id, report_text, is_home=False)
         else:
@@ -506,7 +552,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Polling Telegram Aggressive Multi-Pair dimulai...")
+    print("Bot All-In, Target 200rb & Safety 3% Berjalan...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
