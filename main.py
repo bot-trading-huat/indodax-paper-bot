@@ -37,7 +37,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["BTC siap..."], maxlen=5),
+        "minute_logs": deque(["siap..."], maxlen=5),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -96,7 +96,7 @@ def update_market_prices():
                             p_data["price_trend"] = "🔻"
                             char = "▂"
                         else:
-                            p_data["price_trend"] = "⏺"
+                            p_data["price_trend"] = "⏺️"
                             char = "—"
                     else:
                         char = "—"
@@ -177,14 +177,12 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     except Exception as e:
         return False, str(e)
 
-# FUNGSI OTOMATIS: PINDAHKAN / BAGI SALDO IDR KE USDT SAAT STARTUP
 def auto_split_and_convert_balance():
     time.sleep(2)
     success, idr_cash, _, usdt_amt, _, err = fetch_realtime_account()
     if not success:
         return
 
-    # Jika saldo USDT masih sedikit/nol dan IDR cukup untuk dibagi 2
     if usdt_amt < 1.0 and idr_cash > 50000:
         target_conversion_idr = (idr_cash / 2) * 0.995
         add_log("usdtidr", f"Otomatis membagi & menukar separuh IDR ke USDT...")
@@ -243,30 +241,28 @@ def get_home_text():
     usdt_logs = "\n".join(usdt_p["minute_logs"])
 
     return (
-        f"💰 *TOTAL KESELURUHAN (EQUITY): Rp {total_equity:,.2f}*\n"
-        f"⏱ _Waktu: {now_wib} WIB_\n\n"
-        f"-------------------------------------\n"
-        f"1️⃣ **BTC/IDR** {btc_status} {btc_p['price_trend']}\n"
-        f"• Harga BTC: Rp {btc_price:,.2f}\n"
-        f"• Nilai Aset BTC: Rp {btc_val:,.2f} ({btc_amt:.6f} BTC)\n"
-        f"• Grafik: `{btc_chart}`\n"
-        f"• Posisi: {btc_pos}\n\n"
-        f"📊 **REKAP PERFORMA BTC:**\n"
-        f"• Total Trade: {btc_p['total_trades']}x\n"
-        f"• Total Win: {btc_p['winning_trades']} | Total Lose: {btc_p['losing_trades']}\n\n"
-        f"📋 **KOTAK HITAM (LOG BTC):**\n"
-        f"```{btc_logs}```\n\n"
-        f"-------------------------------------\n"
-        f"2️⃣ **USDT/IDR** {usdt_status} {usdt_p['price_trend']}\n"
-        f"• Harga USDT: Rp {usdt_price:,.2f}\n"
-        f"• Saldo/Nilai USDT: {usdt_amt:,.2f} USDT (Rp {usdt_val:,.2f})\n"
-        f"• Grafik: `{usdt_chart}`\n"
-        f"• Posisi: {usdt_pos}\n\n"
-        f"📊 **REKAP PERFORMA USDT:**\n"
-        f"• Total Trade: {usdt_p['total_trades']}x\n"
-        f"• Total Win: {usdt_p['winning_trades']} | Total Lose: {usdt_p['losing_trades']}\n\n"
-        f"📋 **KOTAK HITAM (LOG USDT):**\n"
-        f"```{usdt_logs}```"
+        f"💰 TOTAL EQUITY: Rp {total_equity:,.2f}\n"
+        f"Jam : ⏱ {now_wib}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"1️⃣ BTC/IDR | {btc_p['price_trend']}\n"
+        f"Status: {btc_status}\n"
+        f"• Harga: Rp {btc_price:,.2f}\n"
+        f"• Aset: Rp {btc_val:,.2f} ({btc_amt:.6f} BTC)\n"
+        f"• Grafik: {btc_chart}\n"
+        f"• Posisi: {btc_pos}\n"
+        f"📊 REKAP BTC: Trade: {btc_p['total_trades']}x | Win: {btc_p['winning_trades']} | Lose: {btc_p['losing_trades']}\n"
+        f"📋 LOG BTC:\n\n"
+        f"{btc_logs}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"2️⃣ USDT/IDR | {usdt_p['price_trend']}\n"
+        f"Status: {usdt_status}\n"
+        f"• Harga: Rp {usdt_price:,.2f}\n"
+        f"• Aset: {usdt_amt:,.2f} USDT (Rp {usdt_val:,.2f})\n"
+        f"• Grafik: {usdt_chart}\n"
+        f"• Posisi: {usdt_pos}\n"
+        f"📊 REKAP USDT: Trade: {usdt_p['total_trades']}x | Win: {usdt_p['winning_trades']} | Lose: {usdt_p['losing_trades']}\n"
+        f"📋 LOG USDT:\n\n"
+        f"{usdt_logs}"
     )
 
 def auto_refresh_dashboard_loop():
@@ -287,7 +283,7 @@ def auto_refresh_dashboard_loop():
                         global_state["last_rendered_text"] = new_text
         except Exception as e:
             print("Auto Refresh Error:", e)
-        time.sleep(1) # Dipercepat menjadi setiap 1 detik
+        time.sleep(1)
 
 def pair_trading_worker(pair_key):
     p_data = pairs_state[pair_key]
@@ -456,13 +452,8 @@ def polling():
             time.sleep(5)
 
 if __name__ == "__main__":
-    # Jalankan fungsi bagi saldo otomatis di latar belakang saat dinyalakan
     threading.Thread(target=auto_split_and_convert_balance, daemon=True).start()
-    
-    # Jalankan engine trading
     threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("usdtidr",), daemon=True).start()
-    
-    # Jalankan auto-refresh dashboard per detik & polling telegram
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     polling()
