@@ -59,7 +59,7 @@ pairs_state = {
 
 global_state = {
     "dashboard_chat_id": None,
-    "dashboard_msg_id": None,
+    "last_active_msg_id": None,
     "last_rendered_text": ""
 }
 
@@ -220,12 +220,13 @@ def get_back_keyboard():
         ]
     }
 
-def get_home_text():
+def get_home_text(is_final=False):
     success, idr_bal, btc_amt, usdt_amt, total_equity, err = fetch_realtime_account()
     if not success:
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
     now_wib = get_wib_time()
+    header_status = "🏁 FINAL" if is_final else "📊 LIVE DASHBOARD"
 
     # 1. DATA BTC
     btc_p = pairs_state["btcidr"]
@@ -252,6 +253,7 @@ def get_home_text():
     usdt_logs = "\n".join(usdt_p["minute_logs"])
 
     return (
+        f"{header_status}\n"
         f"💰 TOTAL EQUITY: Rp {total_equity:,.2f}\n"
         f"Jam : ⏱ {now_wib}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -277,16 +279,16 @@ def get_home_text():
     )
 
 def auto_refresh_dashboard_loop():
-    """Mengupdate pesan dashboard utama secara live"""
+    """Mengupdate pesan dashboard aktif secara live setiap detik"""
     while True:
         try:
             update_market_prices()
-            if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
-                new_text = get_home_text()
+            if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
+                new_text = get_home_text(is_final=False)
                 if new_text != global_state["last_rendered_text"]:
                     res = telegram("editMessageText", {
                         "chat_id": str(global_state["dashboard_chat_id"]),
-                        "message_id": global_state["dashboard_msg_id"],
+                        "message_id": global_state["last_active_msg_id"],
                         "text": new_text,
                         "parse_mode": "Markdown",
                         "reply_markup": get_main_keyboard()
@@ -298,20 +300,34 @@ def auto_refresh_dashboard_loop():
         time.sleep(1)
 
 def minute_report_worker():
-    """Setiap 1 menit mengirim chat baru persis seperti format dashboard utama (final & utuh)"""
+    """Setiap 1 menit: Menandai chat aktif lama menjadi FINAL, lalu mengirim chat baru sebagai dashboard aktif berikutnya"""
     while True:
         time.sleep(60)
-        if global_state["dashboard_chat_id"]:
+        if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
             try:
-                # Menggunakan fungsi get_home_text() agar format pesan baru persis sama persis dengan dashboard utama
-                full_dashboard_format = get_home_text()
-                telegram("sendMessage", {
+                # 1. Ubah chat sebelumnya menjadi FINAL
+                final_text = get_home_text(is_final=True)
+                telegram("editMessageText", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
-                    "text": f"📌 *[HISTORY PER MENIT]*\n\n{full_dashboard_format}",
-                    "parse_mode": "Markdown"
+                    "message_id": global_state["last_active_msg_id"],
+                    "text": final_text,
+                    "parse_mode": "Markdown",
+                    "reply_markup": get_main_keyboard()
                 })
+
+                # 2. Kirim chat baru di bawahnya untuk dilanjutkan secara live
+                new_live_text = get_home_text(is_final=False)
+                res = telegram("sendMessage", {
+                    "chat_id": str(global_state["dashboard_chat_id"]),
+                    "text": new_live_text,
+                    "parse_mode": "Markdown",
+                    "reply_markup": get_main_keyboard()
+                })
+                if res and res.get("ok"):
+                    global_state["last_active_msg_id"] = res["result"]["message_id"]
+                    global_state["last_rendered_text"] = new_live_text
             except Exception as e:
-                print("Minute Report Error:", e)
+                print("Minute Report Worker Error:", e)
 
 def daily_midnight_report_worker():
     """Rekap laporan jam 00.00 WIB"""
@@ -414,7 +430,7 @@ def update_menu(chat_id, msg_id, text, is_home=False):
     })
     if is_home and res and res.get("ok"):
         global_state["dashboard_chat_id"] = chat_id
-        global_state["dashboard_msg_id"] = msg_id
+        global_state["last_active_msg_id"] = msg_id
         global_state["last_rendered_text"] = text
 
 def send_menu(chat_id, text):
@@ -426,7 +442,7 @@ def send_menu(chat_id, text):
     })
     if res and res.get("ok"):
         global_state["dashboard_chat_id"] = chat_id
-        global_state["dashboard_msg_id"] = res["result"]["message_id"]
+        global_state["last_active_msg_id"] = res["result"]["message_id"]
         global_state["last_rendered_text"] = text
 
 def handle_update(update):
@@ -442,14 +458,14 @@ def handle_update(update):
             p["is_running"] = not p["is_running"]
             add_log("btcidr", f"Bot BTC {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
             answer_callback(cb_id, f"BTC Bot: {'Aktif' if p['is_running'] else 'Berhenti'}")
-            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+            update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "toggle_usdtidr":
             p = pairs_state["usdtidr"]
             p["is_running"] = not p["is_running"]
             add_log("usdtidr", f"Bot USDT {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
             answer_callback(cb_id, f"USDT Bot: {'Aktif' if p['is_running'] else 'Berhenti'}")
-            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+            update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
 
         elif data == "btn_split_usdt":
             answer_callback(cb_id, "Memproses pemindahan saldo ke USDT...")
@@ -461,11 +477,11 @@ def handle_update(update):
                     add_log("usdtidr", f"Sukses memindahkan saldo ke USDT!")
                 else:
                     add_log("usdtidr", f"Gagal pindah saldo: {res_data}")
-            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+            update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_home":
             answer_callback(cb_id)
-            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+            update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_status":
             answer_callback(cb_id)
@@ -500,7 +516,7 @@ def handle_update(update):
         chat_id = msg.get("chat", {}).get("id")
         text = (msg.get("text") or "").strip()
         if chat_id and (text.startswith("/start") or text.startswith("/menu")):
-            send_menu(chat_id, get_home_text())
+            send_menu(chat_id, get_home_text(is_final=False))
 
 def polling():
     offset = None
