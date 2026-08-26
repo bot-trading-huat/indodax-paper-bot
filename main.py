@@ -18,13 +18,12 @@ def get_wib_time():
     return datetime.now(WIB).strftime("%H:%M:%S")
 
 # ==========================================
-# KONFIGURASI API & TOKEN (LANGSUNG TERPASANG)
+# KONFIGURASI API & TOKEN
 # ==========================================
 TOKEN = "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U"
 INDODAX_API_KEY = "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK".strip()
 INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b".strip()
 
-# State untuk masing-masing pair (BTC & USDT)
 pairs_state = {
     "btcidr": {
         "name": "BTC/IDR",
@@ -38,7 +37,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["Bot BTC siap..."], maxlen=5),
+        "minute_logs": deque(["BTC siap..."], maxlen=5),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -52,7 +51,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["Bot USDT siap..."], maxlen=5),
+        "minute_logs": deque(["USDT siap..."], maxlen=5),
     }
 }
 
@@ -145,112 +144,6 @@ def fetch_realtime_account():
     except Exception as e:
         return False, 0.0, 0.0, 0.0, 0.0, str(e)
 
-# ==========================================
-# KEYBOARDS (TOMBOL KONTROL 2 PAIR)
-# ==========================================
-def get_main_keyboard():
-    btc_running = pairs_state["btcidr"]["is_running"]
-    usdt_running = pairs_state["usdtidr"]["is_running"]
-    
-    return {
-        "inline_keyboard": [
-            [
-                {"text": f"{'⏹ Hentikan BTC' if btc_running else '▶️ Jalankan BTC'}", "callback_data": "toggle_btcidr"},
-                {"text": f"{'⏹ Hentikan USDT' if usdt_running else '▶️ Jalankan USDT'}", "callback_data": "toggle_usdtidr"}
-            ],
-            [{"text": "📊 Status Lengkap & Saldo", "callback_data": "btn_status"}],
-            [{"text": "📈 Laporan Performa Global", "callback_data": "btn_report"}]
-        ]
-    }
-
-def get_back_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "🏠 Kembali ke Dashboard", "callback_data": "btn_home"}]
-        ]
-    }
-
-# ==========================================
-# DASHBOARD TEXT BUILDER (BTC 1, USDT 2)
-# ==========================================
-def get_home_text():
-    success, idr_bal, btc_amt, usdt_amt, total_equity, err = fetch_realtime_account()
-    if not success:
-        return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
-
-    now_wib = get_wib_time()
-
-    # 1. DATA BTC (NOMOR PERTAMA)
-    btc_p = pairs_state["btcidr"]
-    btc_status = "🟢 Aktif" if btc_p["is_running"] else "🔴 Berhenti"
-    btc_price = btc_p["last_market_price"]
-    btc_chart = "".join(btc_p["chart_chars"])
-    btc_val = btc_amt * btc_price
-    btc_pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if btc_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
-    btc_logs = "\n".join(btc_p["minute_logs"])
-
-    # 2. DATA USDT (NOMOR KEDUA)
-    usdt_p = pairs_state["usdtidr"]
-    usdt_status = "🟢 Aktif" if usdt_p["is_running"] else "🔴 Berhenti"
-    usdt_price = usdt_p["last_market_price"]
-    usdt_chart = "".join(usdt_p["chart_chars"])
-    usdt_val = usdt_amt * usdt_price
-    usdt_pos = f"Memegang Aset ({usdt_amt:.2f} USDT)" if usdt_p["in_position"] else "IDR Ready"
-    usdt_logs = "\n".join(usdt_p["minute_logs"])
-
-    return (
-        f"💰 *TOTAL EQUITY: Rp {total_equity:,.2f}*\n"
-        f"⏱ _Waktu: {now_wib} WIB_\n\n"
-        f"-------------------------------------\n"
-        f"1️⃣ **BTC/IDR** {btc_status} {btc_p['price_trend']}\n"
-        f"• Harga BTC: Rp {btc_price:,.2f}\n"
-        f"• Nilai Aset BTC: Rp {btc_val:,.2f} ({btc_amt:.6f} BTC)\n"
-        f"• Grafik: `{btc_chart}`\n"
-        f"• Posisi: {btc_pos}\n\n"
-        f"📊 **REKAP PERFORMA BTC:**\n"
-        f"• Total Trade: {btc_p['total_trades']}x\n"
-        f"• Total Win: {btc_p['winning_trades']} | Total Lose: {btc_p['losing_trades']}\n\n"
-        f"📋 **KOTAK HITAM (LOG BTC):**\n"
-        f"```{btc_logs}```\n\n"
-        f"-------------------------------------\n"
-        f"2️⃣ **USDT/IDR** {usdt_status} {usdt_p['price_trend']}\n"
-        f"• Harga USDT: Rp {usdt_price:,.2f}\n"
-        f"• Nilai Aset USDT: Rp {usdt_val:,.2f} ({usdt_amt:.2f} USDT)\n"
-        f"• Grafik: `{usdt_chart}`\n"
-        f"• Posisi: {usdt_pos}\n\n"
-        f"📊 **REKAP PERFORMA USDT:**\n"
-        f"• Total Trade: {usdt_p['total_trades']}x\n"
-        f"• Total Win: {usdt_p['winning_trades']} | Total Lose: {usdt_p['losing_trades']}\n\n"
-        f"📋 **KOTAK HITAM (LOG USDT):**\n"
-        f"```{usdt_logs}```"
-    )
-
-# ==========================================
-# AUTO-REFRESH LIVE DASHBOARD
-# ==========================================
-def auto_refresh_dashboard_loop():
-    while True:
-        try:
-            update_market_prices()
-            if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
-                new_text = get_home_text()
-                if new_text != global_state["last_rendered_text"]:
-                    res = telegram("editMessageText", {
-                        "chat_id": str(global_state["dashboard_chat_id"]),
-                        "message_id": global_state["dashboard_msg_id"],
-                        "text": new_text,
-                        "parse_mode": "Markdown",
-                        "reply_markup": get_main_keyboard()
-                    })
-                    if res and res.get("ok"):
-                        global_state["last_rendered_text"] = new_text
-        except Exception as e:
-            print("Auto Refresh Error:", e)
-        time.sleep(3)
-
-# ==========================================
-# TRADING ENGINE (PARALEL BTC & USDT)
-# ==========================================
 def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
@@ -284,6 +177,118 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     except Exception as e:
         return False, str(e)
 
+# FUNGSI OTOMATIS: PINDAHKAN / BAGI SALDO IDR KE USDT SAAT STARTUP
+def auto_split_and_convert_balance():
+    time.sleep(2)
+    success, idr_cash, _, usdt_amt, _, err = fetch_realtime_account()
+    if not success:
+        return
+
+    # Jika saldo USDT masih sedikit/nol dan IDR cukup untuk dibagi 2
+    if usdt_amt < 1.0 and idr_cash > 50000:
+        target_conversion_idr = (idr_cash / 2) * 0.995
+        add_log("usdtidr", f"Otomatis membagi & menukar separuh IDR ke USDT...")
+        success_order, res_data = execute_real_order("usdtidr", "buy", amount_idr=target_conversion_idr)
+        if success_order:
+            add_log("usdtidr", "Pembagian saldo ke USDT Berhasil!")
+        else:
+            add_log("usdtidr", f"Gagal konversi: {res_data}")
+
+def get_main_keyboard():
+    btc_running = pairs_state["btcidr"]["is_running"]
+    usdt_running = pairs_state["usdtidr"]["is_running"]
+    
+    return {
+        "inline_keyboard": [
+            [
+                {"text": f"{'⏹ Hentikan BTC' if btc_running else '▶️ Jalankan BTC'}", "callback_data": "toggle_btcidr"},
+                {"text": f"{'⏹ Hentikan USDT' if usdt_running else '▶️ Jalankan USDT'}", "callback_data": "toggle_usdtidr"}
+            ],
+            [{"text": "🔄 Bagi/Pindahkan Saldo ke USDT", "callback_data": "btn_split_usdt"}],
+            [{"text": "📊 Status Lengkap & Saldo", "callback_data": "btn_status"}],
+            [{"text": "📈 Laporan Performa Global", "callback_data": "btn_report"}]
+        ]
+    }
+
+def get_back_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "🏠 Kembali ke Dashboard", "callback_data": "btn_home"}]
+        ]
+    }
+
+def get_home_text():
+    success, idr_bal, btc_amt, usdt_amt, total_equity, err = fetch_realtime_account()
+    if not success:
+        return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
+
+    now_wib = get_wib_time()
+
+    # 1. DATA BTC
+    btc_p = pairs_state["btcidr"]
+    btc_status = "🟢 Aktif" if btc_p["is_running"] else "🔴 Berhenti"
+    btc_price = btc_p["last_market_price"]
+    btc_chart = "".join(btc_p["chart_chars"])
+    btc_val = btc_amt * btc_price
+    btc_pos = f"Memegang Aset ({btc_amt:.6f} BTC)" if btc_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
+    btc_logs = "\n".join(btc_p["minute_logs"])
+
+    # 2. DATA USDT
+    usdt_p = pairs_state["usdtidr"]
+    usdt_status = "🟢 Aktif" if usdt_p["is_running"] else "🔴 Berhenti"
+    usdt_price = usdt_p["last_market_price"]
+    usdt_chart = "".join(usdt_p["chart_chars"])
+    usdt_val = usdt_amt * usdt_price
+    usdt_pos = f"Memegang Aset ({usdt_amt:,.2f} USDT)" if usdt_p["in_position"] else f"USDT Ready ({usdt_amt:,.2f} USDT)"
+    usdt_logs = "\n".join(usdt_p["minute_logs"])
+
+    return (
+        f"💰 *TOTAL KESELURUHAN (EQUITY): Rp {total_equity:,.2f}*\n"
+        f"⏱ _Waktu: {now_wib} WIB_\n\n"
+        f"-------------------------------------\n"
+        f"1️⃣ **BTC/IDR** {btc_status} {btc_p['price_trend']}\n"
+        f"• Harga BTC: Rp {btc_price:,.2f}\n"
+        f"• Nilai Aset BTC: Rp {btc_val:,.2f} ({btc_amt:.6f} BTC)\n"
+        f"• Grafik: `{btc_chart}`\n"
+        f"• Posisi: {btc_pos}\n\n"
+        f"📊 **REKAP PERFORMA BTC:**\n"
+        f"• Total Trade: {btc_p['total_trades']}x\n"
+        f"• Total Win: {btc_p['winning_trades']} | Total Lose: {btc_p['losing_trades']}\n\n"
+        f"📋 **KOTAK HITAM (LOG BTC):**\n"
+        f"```{btc_logs}```\n\n"
+        f"-------------------------------------\n"
+        f"2️⃣ **USDT/IDR** {usdt_status} {usdt_p['price_trend']}\n"
+        f"• Harga USDT: Rp {usdt_price:,.2f}\n"
+        f"• Saldo/Nilai USDT: {usdt_amt:,.2f} USDT (Rp {usdt_val:,.2f})\n"
+        f"• Grafik: `{usdt_chart}`\n"
+        f"• Posisi: {usdt_pos}\n\n"
+        f"📊 **REKAP PERFORMA USDT:**\n"
+        f"• Total Trade: {usdt_p['total_trades']}x\n"
+        f"• Total Win: {usdt_p['winning_trades']} | Total Lose: {usdt_p['losing_trades']}\n\n"
+        f"📋 **KOTAK HITAM (LOG USDT):**\n"
+        f"```{usdt_logs}```"
+    )
+
+def auto_refresh_dashboard_loop():
+    while True:
+        try:
+            update_market_prices()
+            if global_state["dashboard_chat_id"] and global_state["dashboard_msg_id"]:
+                new_text = get_home_text()
+                if new_text != global_state["last_rendered_text"]:
+                    res = telegram("editMessageText", {
+                        "chat_id": str(global_state["dashboard_chat_id"]),
+                        "message_id": global_state["dashboard_msg_id"],
+                        "text": new_text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": get_main_keyboard()
+                    })
+                    if res and res.get("ok"):
+                        global_state["last_rendered_text"] = new_text
+        except Exception as e:
+            print("Auto Refresh Error:", e)
+        time.sleep(1) # Dipercepat menjadi setiap 1 detik
+
 def pair_trading_worker(pair_key):
     p_data = pairs_state[pair_key]
     highest_price = 0.0
@@ -296,25 +301,23 @@ def pair_trading_worker(pair_key):
 
                 if success and current_price > 0:
                     if not p_data["in_position"]:
-                        if idr_cash >= 20000:
+                        if pair_key == "btcidr" and idr_cash >= 20000:
                             buy_idr = (idr_cash / 2) * 0.995
-                            add_log(pair_key, f"Mencoba BUY {p_data['name']} dg Rp {buy_idr:,.0f}...")
+                            add_log(pair_key, f"Mencoba BUY BTC dg Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=buy_idr)
-                            
                             if success_order:
                                 p_data["buy_price"] = current_price
                                 highest_price = current_price
                                 p_data["in_position"] = True
                                 add_log(pair_key, f"BUY BERHASIL @ Rp {current_price:,.0f}")
-                            else:
-                                add_log(pair_key, f"Gagal BUY: {res_data}")
+                        elif pair_key == "usdtidr" and usdt_amt >= 2.0:
+                            add_log(pair_key, f"Bot USDT siap bekerja...")
 
                     elif p_data["in_position"]:
                         if current_price > highest_price:
                             highest_price = current_price
 
                         price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
-                        
                         if price_change_pct >= 0.008 or price_change_pct <= -0.015:
                             success, _, current_btc, current_usdt, _, _ = fetch_realtime_account()
                             target_amt = current_btc if pair_key == "btcidr" else current_usdt
@@ -333,11 +336,8 @@ def pair_trading_worker(pair_key):
                                     highest_price = 0.0
         except Exception as e:
             print(f"ENGINE ERROR {pair_key}:", e)
-        time.sleep(10)
+        time.sleep(5)
 
-# ==========================================
-# TELEGRAM HANDLERS & POLLING
-# ==========================================
 def answer_callback(cb_id, text=""):
     telegram("answerCallbackQuery", {"callback_query_id": cb_id, "text": text, "show_alert": False})
 
@@ -388,6 +388,18 @@ def handle_update(update):
             add_log("usdtidr", f"Bot USDT {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
             answer_callback(cb_id, f"USDT Bot: {'Aktif' if p['is_running'] else 'Berhenti'}")
             update_menu(chat_id, msg_id, get_home_text(), is_home=True)
+
+        elif data == "btn_split_usdt":
+            answer_callback(cb_id, "Memproses pemindahan saldo ke USDT...")
+            success, idr_cash, _, _, _, _ = fetch_realtime_account()
+            if idr_cash > 20000:
+                half_idr = (idr_cash / 2) * 0.995
+                success_order, res_data = execute_real_order("usdtidr", "buy", amount_idr=half_idr)
+                if success_order:
+                    add_log("usdtidr", f"Sukses memindahkan saldo ke USDT!")
+                else:
+                    add_log("usdtidr", f"Gagal pindah saldo: {res_data}")
+            update_menu(chat_id, msg_id, get_home_text(), is_home=True)
             
         elif data == "btn_home":
             answer_callback(cb_id)
@@ -397,11 +409,11 @@ def handle_update(update):
             answer_callback(cb_id)
             success, idr, btc, usdt, eq, _ = fetch_realtime_account()
             status_text = (
-                f"📊 *STATUS & SALDO AKUN*\n\n"
+                f"📊 *STATUS & SALDO AKUN LENGKAP*\n\n"
                 f"• IDR Tunai: Rp {idr:,.2f}\n"
                 f"• Saldo BTC: {btc:.6f} BTC\n"
-                f"• Saldo USDT: {usdt:.2f} USDT\n"
-                f"• Total Equity: Rp {eq:,.2f}"
+                f"• Saldo USDT: {usdt:,.2f} USDT\n"
+                f"• **TOTAL KESELURUHAN (EQUITY): Rp {eq:,.2f}**"
             )
             update_menu(chat_id, msg_id, status_text, is_home=False)
             
@@ -444,7 +456,13 @@ def polling():
             time.sleep(5)
 
 if __name__ == "__main__":
+    # Jalankan fungsi bagi saldo otomatis di latar belakang saat dinyalakan
+    threading.Thread(target=auto_split_and_convert_balance, daemon=True).start()
+    
+    # Jalankan engine trading
     threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("usdtidr",), daemon=True).start()
+    
+    # Jalankan auto-refresh dashboard per detik & polling telegram
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     polling()
