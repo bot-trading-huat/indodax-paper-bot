@@ -21,13 +21,13 @@ def get_wib_datetime():
     return datetime.now(WIB)
 
 # ==========================================
-# KONFIGURASI API & DAFTAR PASAR (DIKEMBALIKAN KE IDR)
+# KONFIGURASI API & DAFTAR PASAR
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U")
 INDODAX_API_KEY = os.getenv("INDODAX_API_KEY", "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK").strip()
 INDODAX_SECRET_KEY = os.getenv("INDODAX_SECRET_KEY", "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b").strip()
 
-# Daftar pasar yang ingin dipantau/di-trading-kan secara terpisah (dikembalikan ke btc_idr)
+# Menggunakan format resmi Indodax dengan garis bawah (btc_idr)
 ACTIVE_PAIRS = ["btc_idr"] 
 
 # State terpisah untuk setiap pair agar tidak saling gabung/tercampur
@@ -183,7 +183,7 @@ def get_home_text(pair):
     status_str = f"Aktif {state['price_trend']}" if state["is_running"] else f"Berhenti {state['price_trend']}"
     now_wib = get_wib_time()
 
-    coin_name = pair.replace("_id", "").upper() # Menjadi BTC
+    coin_name = pair.split("_")[0].upper() # Menjadi BTC
     pos_info = f"⚡ *Posisi:* Scalping (Holding {coin_name})" if state["in_position"] else "💵 *Posisi:* Standby (Persiapan Beli)"
     chart_str = generate_block_chart(pair)
 
@@ -219,7 +219,7 @@ def execute_real_order(pair, side, amount_idr=0, amount_coin=0):
         "type": side,
         "nonce": nonce
     }
-    coin_key = pair.replace("_idr", "")
+    coin_key = pair.split("_")[0]
     if side == "buy":
         params["idr"] = f"{amount_idr:.0f}"
     else:
@@ -258,7 +258,7 @@ def market_trading_worker(pair):
                 if current_price > 0:
                     # 1. KONDISI BELI (ENTRY)
                     if not state["in_position"]:
-                        if idr_cash > 10000:  # Minimum saldo IDR aman untuk eksekusi
+                        if idr_cash > 10000:
                             buy_idr = idr_cash * 0.995 
                             add_log(pair, f"Mencoba BUY {pair.upper()} dg Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order(pair, "buy", amount_idr=buy_idr)
@@ -323,8 +323,10 @@ def handle_update(update):
         data = cb.get("data", "")
 
         parts = data.split("_")
-        if len(parts) == 2:
-            action, pair = parts[0], parts[1]
+        # Menangani callback pair yang mengandung underscore seperti btc_idr
+        if len(parts) >= 2:
+            action = parts[0]
+            pair = "_".join(parts[1:])
             if pair in market_states:
                 state = market_states[pair]
                 
