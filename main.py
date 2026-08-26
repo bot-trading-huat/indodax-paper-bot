@@ -298,34 +298,23 @@ def auto_refresh_dashboard_loop():
         time.sleep(1)
 
 def minute_report_worker():
-    """Mengirim laporan histori pergerakan ringkas setiap 1 menit sebagai chat baru (tetap seperti sebelumnya)"""
+    """Setiap 1 menit mengirim chat baru persis seperti format dashboard utama (final & utuh)"""
     while True:
         time.sleep(60)
         if global_state["dashboard_chat_id"]:
             try:
-                success, idr, btc, usdt, eq, _ = fetch_realtime_account()
-                b = pairs_state["btcidr"]
-                u = pairs_state["usdtidr"]
-                
-                report_msg = (
-                    f"⏱ *LAPORAN HISTORI PER MENIT* ({get_wib_time()})\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"💰 Total Equity: Rp {eq:,.2f}\n"
-                    f"• BTC Price: Rp {b['last_market_price']:,.2f} ({b['price_trend']})\n"
-                    f"• USDT Price: Rp {u['last_market_price']:,.2f} ({u['price_trend']})\n"
-                    f"• BTC Trade/Win/Lose: {b['total_trades']}/{b['winning_trades']}/{b['losing_trades']}\n"
-                    f"• USDT Trade/Win/Lose: {u['total_trades']}/{u['winning_trades']}/{u['losing_trades']}"
-                )
+                # Menggunakan fungsi get_home_text() agar format pesan baru persis sama persis dengan dashboard utama
+                full_dashboard_format = get_home_text()
                 telegram("sendMessage", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
-                    "text": report_msg,
+                    "text": f"📌 *[HISTORY PER MENIT]*\n\n{full_dashboard_format}",
                     "parse_mode": "Markdown"
                 })
             except Exception as e:
                 print("Minute Report Error:", e)
 
 def daily_midnight_report_worker():
-    """Rekap harian jam 00:00 WIB dengan format ringkas yang berbeda"""
+    """Rekap laporan jam 00.00 WIB"""
     while True:
         now = datetime.now(WIB)
         if now.hour == 0 and now.minute == 0:
@@ -337,16 +326,13 @@ def daily_midnight_report_worker():
                 total_trades = b['total_trades'] + u['total_trades']
                 total_daily_profit = b['daily_profit_idr'] + u['daily_profit_idr']
 
-                # Format laporan tengah malam yang disesuaikan/berbeda
                 report_msg = (
-                    f"📌 *RINGKASAN GANTI HARI (00:00 WIB)*\n"
-                    f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n"
-                    f"──────────────────────\n"
-                    f"✔️ Total Aktivitas Trade: {total_trades}x\n"
-                    f"🏆 Menang / Kalah: {total_win} / {total_lose}\n"
-                    f"💵 Akumulasi P/L: Rp {total_daily_profit:,.2f}\n"
-                    f"──────────────────────\n"
-                    f"🚀 _Sesi trading baru dimulai, Semoga Gacor!_"
+                    f"🌙 *REKAP HARIAN (00:00 WIB)*\n"
+                    f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n\n"
+                    f"• Total Trade: {total_trades}x\n"
+                    f"• Win: {total_win} | Lose: {total_lose}\n"
+                    f"• **Profit Harian: Rp {total_daily_profit:,.2f}**\n\n"
+                    f"_Bot melanjutkan sesi hari baru! Semoga Gacor!_"
                 )
                 telegram("sendMessage", {
                     "chat_id": str(global_state["dashboard_chat_id"]),
