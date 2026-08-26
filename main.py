@@ -37,7 +37,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=5),
+        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=4),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -51,7 +51,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=5),
+        "minute_logs": deque(["SEMOGA GACOR !!"], maxlen=4),
     }
 }
 
@@ -74,7 +74,11 @@ def telegram(method, params=None):
 
 def add_log(pair_key, text):
     timestamp = get_wib_time()
-    pairs_state[pair_key]["minute_logs"].append(f"[{timestamp}] {text}")
+    # Pastikan SEMOGA GACOR !! tetap di awal, log baru masuk di bawahnya
+    p_logs = pairs_state[pair_key]["minute_logs"]
+    if "SEMOGA GACOR !!" not in p_logs:
+        p_logs.appendleft("SEMOGA GACOR !!")
+    p_logs.append(f"[{timestamp}] {text}")
 
 def update_market_prices():
     for pair_key, p_data in pairs_state.items():
