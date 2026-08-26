@@ -34,6 +34,7 @@ pairs_state = {
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,
+        "daily_profit_idr": 0.0,
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
@@ -48,6 +49,7 @@ pairs_state = {
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,
+        "daily_profit_idr": 0.0,
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
@@ -288,6 +290,43 @@ def auto_refresh_dashboard_loop():
             print("Auto Refresh Error:", e)
         time.sleep(1)
 
+def daily_midnight_report_worker():
+    """Mengirim rekap laporan otomatis setiap pukul 00.00 WIB"""
+    while True:
+        now = datetime.now(WIB)
+        # Cek jika jam 00:00
+        if now.hour == 0 and now.minute == 0:
+            if global_state["dashboard_chat_id"]:
+                b = pairs_state["btcidr"]
+                u = pairs_state["usdtidr"]
+                total_win = b['winning_trades'] + u['winning_trades']
+                total_lose = b['losing_trades'] + u['losing_trades']
+                total_trades = b['total_trades'] + u['total_trades']
+                total_daily_profit = b['daily_profit_idr'] + u['daily_profit_idr']
+
+                report_msg = (
+                    f"🌙 *REKAP LAPORAN HARIAN OTOMATIS (00:00 WIB)*\n"
+                    f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n\n"
+                    f"• Total Trade Hari Ini: {total_trades}x\n"
+                    f"• Win: {total_win} | Lose: {total_lose}\n"
+                    f"• **Estimasi Profit Harian: Rp {total_daily_profit:,.2f}**\n\n"
+                    f"_Bot siap melanjutkan sesi trading hari baru! Semoga Gacor!_"
+                )
+                telegram("sendMessage", {
+                    "chat_id": str(global_state["dashboard_chat_id"]),
+                    "text": report_msg,
+                    "parse_mode": "Markdown"
+                })
+                # Reset profit harian setelah dikirim
+                b['daily_profit_idr'] = 0.0
+                u['daily_profit_idr'] = 0.0
+                b['total_trades'] = 0; b['winning_trades'] = 0; b['losing_trades'] = 0
+                u['total_trades'] = 0; u['winning_trades'] = 0; u['losing_trades'] = 0
+            
+            # Tunggu 65 detik agar tidak ter-trigger berulang kali dalam menit yang sama
+            time.sleep(65)
+        time.sleep(15)
+
 def pair_trading_worker(pair_key):
     p_data = pairs_state[pair_key]
     highest_price = 0.0
@@ -317,7 +356,8 @@ def pair_trading_worker(pair_key):
                             highest_price = current_price
 
                         price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
-                        if price_change_pct >= 0.008 or price_change_pct <= -0.015:
+                        # Otak diset agresif mengejar target harian ( TP +0.7% / SL -1.2% )
+                        if price_change_pct >= 0.007 or price_change_pct <= -0.012:
                             success, _, current_btc, current_usdt, _, _ = fetch_realtime_account()
                             target_amt = current_btc if pair_key == "btcidr" else current_usdt
                             
@@ -326,11 +366,16 @@ def pair_trading_worker(pair_key):
                                 if success_order:
                                     p_data["in_position"] = False
                                     p_data["total_trades"] += 1
+                                    
+                                    # Hitung perkiraan profit/loss dalam IDR
+                                    trade_profit = (current_price - p_data["buy_price"]) * target_amt
                                     if price_change_pct > 0:
                                         p_data["winning_trades"] += 1
+                                        p_data["daily_profit_idr"] += abs(trade_profit)
                                         add_log(pair_key, f"SELL PROFIT 🔺 (+{price_change_pct*100:.2f}%)")
                                     else:
                                         p_data["losing_trades"] += 1
+                                        p_data["daily_profit_idr"] -= abs(trade_profit)
                                         add_log(pair_key, f"SELL LOSS 🔻 ({price_change_pct*100:.2f}%)")
                                     highest_price = 0.0
         except Exception as e:
@@ -420,10 +465,12 @@ def handle_update(update):
             answer_callback(cb_id)
             b = pairs_state["btcidr"]
             u = pairs_state["usdtidr"]
+            total_prof = b['daily_profit_idr'] + u['daily_profit_idr']
             report_text = (
-                f"📈 *LAPORAN PERFORMA GLOBAL*\n\n"
-                f"**BTC/IDR:**\n- Total Trade: {b['total_trades']}\n- Win: {b['winning_trades']} | Lose: {b['losing_trades']}\n\n"
-                f"**USDT/IDR:**\n- Total Trade: {u['total_trades']}\n- Win: {u['winning_trades']} | Lose: {u['losing_trades']}"
+                f"📈 *LAPORAN PERFORMA GLOBAL & HARIAN*\n\n"
+                f"**BTC/IDR:**\n- Trade: {b['total_trades']}x | Win: {b['winning_trades']} | Lose: {b['losing_trades']}\n\n"
+                f"**USDT/IDR:**\n- Trade: {u['total_trades']}x | Win: {u['winning_trades']} | Lose: {u['losing_trades']}\n\n"
+                f"💰 *Estimasi Profit Hari Ini:* Rp {total_prof:,.2f}"
             )
             update_menu(chat_id, msg_id, report_text, is_home=False)
         else:
@@ -459,4 +506,5 @@ if __name__ == "__main__":
     threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("usdtidr",), daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
+    threading.Thread(target=daily_midnight_report_worker, daemon=True).start()
     polling()
