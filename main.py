@@ -88,7 +88,7 @@ def get_indodax_price():
                         char = "—"
                 else:
                     char = "—"
-                    
+                
                 chart_chars.append(char)
                 state["last_market_price"] = price
                 
