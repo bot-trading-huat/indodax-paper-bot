@@ -51,7 +51,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE ALL-IN & SAFETY 3% AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE OTOMATIS & SAFETY 3% AKTIF !!"], maxlen=4),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -66,7 +66,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE ALL-IN & SAFETY 3% AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE OTOMATIS & SAFETY 3% AKTIF !!"], maxlen=4),
     }
 }
 
@@ -84,7 +84,7 @@ def telegram(method, params=None):
 def add_log(pair_key, text):
     timestamp = get_wib_time()
     p_logs = pairs_state[pair_key]["minute_logs"]
-    if len(p_logs) == 0 or "MODE ALL-IN" in p_logs[0]:
+    if len(p_logs) == 0 or "MODE OTOMATIS" in p_logs[0]:
         p_logs.appendleft("KEJAR TARGET 200K !!")
     p_logs.append(f"[{timestamp}] {text}")
 
@@ -161,6 +161,22 @@ def fetch_realtime_account():
     except Exception as e:
         return False, 0.0, 0.0, 0.0, 0.0, str(e)
 
+def check_initial_positions():
+    """Fungsi untuk mendeteksi koin yang sudah ada di wallet saat bot pertama kali dinyalakan"""
+    success, _, btc_amt, usdt_amt, _, _ = fetch_realtime_account()
+    if success:
+        if btc_amt > 0.00001:
+            pairs_state["btcidr"]["in_position"] = True
+            if pairs_state["btcidr"]["buy_price"] == 0.0:
+                pairs_state["btcidr"]["buy_price"] = pairs_state["btcidr"]["last_market_price"]
+            add_log("btcidr", f"Terdeteksi saldo BTC awal ({btc_amt:.6f}), posisi diset aktif.")
+        
+        if usdt_amt > 0.1:
+            pairs_state["usdtidr"]["in_position"] = True
+            if pairs_state["usdtidr"]["buy_price"] == 0.0:
+                pairs_state["usdtidr"]["buy_price"] = pairs_state["usdtidr"]["last_market_price"]
+            add_log("usdtidr", f"Terdeteksi saldo USDT awal ({usdt_amt:.2f}), posisi diset aktif.")
+
 def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
@@ -230,9 +246,9 @@ def get_home_text(is_final=False):
             header_status = f"☕ ISTIRAHAT COOLING DOWN ({sisa_waktu}s)"
         else:
             global_state["is_resting"] = False
-            header_status = "🔥 ALL-IN TARGET 200RB/DAY"
+            header_status = "🔥 TARGET 200RB/DAY"
     else:
-        header_status = "🏁 FINAL" if is_final else "🔥 ALL-IN TARGET 200RB/DAY"
+        header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY"
 
     total_prof_today = pairs_state["btcidr"]["daily_profit_idr"] + pairs_state["usdtidr"]["daily_profit_idr"]
     target_progress = f"🎯 Profit Hari Ini: Rp {total_prof_today:,.0f} / Rp {DAILY_PROFIT_TARGET:,.0f}"
@@ -394,7 +410,7 @@ def pair_trading_worker(pair_key):
                         drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
                         if drawdown >= MAX_DRAWDOWN_PCT:
                             global_state["is_resting"] = True
-                            global_state["rest_until"] = time.time() + 120  # Diubah jadi 2 Menit (120 detik)
+                            global_state["rest_until"] = time.time() + 120  # 2 Menit Cooling Down
                             
                             if p_data["in_position"]:
                                 target_amt = btc_amt if pair_key == "btcidr" else usdt_amt
@@ -425,7 +441,11 @@ def pair_trading_worker(pair_key):
                             execute_real_order(pair_key, "buy", amount_idr=buy_idr)
 
                     elif p_data["in_position"]:
-                        price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"] if p_data["buy_price"] > 0 else 0.0
+                        # Jika sudah punya posisi (atau terdeteksi koin di wallet), cek target profit/loss untuk dijual otomatis
+                        if p_data["buy_price"] <= 0:
+                            p_data["buy_price"] = current_price
+
+                        price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
 
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_btc, current_usdt, _, _ = fetch_realtime_account()
@@ -558,7 +578,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot All-In, Target 200rb & Cooling Down 2 Menit Berjalan...")
+    print("Bot Final Otomatis & Sinkronisasi Saldo Berjalan...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
@@ -573,6 +593,10 @@ def polling():
             time.sleep(3)
 
 if __name__ == "__main__":
+    # Cek posisi koin saat pertama kali bot menyala
+    update_market_prices()
+    check_initial_positions()
+
     threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
     threading.Thread(target=pair_trading_worker, args=("usdtidr",), daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
