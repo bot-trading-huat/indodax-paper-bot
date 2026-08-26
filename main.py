@@ -20,13 +20,13 @@ def get_wib_time():
 # ==========================================
 # KONFIGURASI API & TOKEN
 # ==========================================
-TOKEN = "8867024450:AAGaZU1bZgT7RQZLS9SRvUJr6wxTpUFinGs"
+TOKEN = "8604634624:AAHKJaVhA3b7fGqOy66yxP9cOkehqwMbn5U"
 INDODAX_API_KEY = "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK".strip()
 INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b".strip()
 
 # TARGET HARIAN & SAFETY LIMIT
 DAILY_PROFIT_TARGET = 200000.0
-MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat 5 menit
+MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
 
 global_state = {
     "dashboard_chat_id": None,
@@ -151,9 +151,9 @@ def fetch_realtime_account():
                 
                 grand_total = idr_cash + btc_val + usdt_val
                 
-                # Inisialisasi atau perbarui peak equity tertinggi untuk deteksi drawdown
-                if global_state["peak_equity"] == 0.0 or grand_total > global_state["peak_equity"]:
-                    global_state["peak_equity"] = grand_total
+                if grand_total > 1000:
+                    if global_state["peak_equity"] == 0.0 or grand_total > global_state["peak_equity"]:
+                        global_state["peak_equity"] = grand_total
                     
                 return True, idr_cash, btc_amt, usdt_amt, grand_total, "OK"
             else:
@@ -284,6 +284,10 @@ def auto_refresh_dashboard_loop():
     while True:
         try:
             update_market_prices()
+            if global_state["is_resting"]:
+                time.sleep(5)
+                continue
+
             if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
                 new_text = get_home_text(is_final=False)
                 if new_text != global_state["last_rendered_text"]:
@@ -303,6 +307,9 @@ def auto_refresh_dashboard_loop():
 def minute_report_worker():
     while True:
         time.sleep(60)
+        if global_state["is_resting"]:
+            continue
+
         if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
             try:
                 final_text = get_home_text(is_final=True)
@@ -367,14 +374,12 @@ def pair_trading_worker(pair_key):
 
     while True:
         try:
-            # Cek apakah bot sedang dalam masa istirahat 3% drawdown
             if global_state["is_resting"]:
                 if time.time() >= global_state["rest_until"]:
                     global_state["is_resting"] = False
-                    add_log(pair_key, "Selesai istirahat 5 menit. Bot aktif kembali!")
-                    # Reset peak equity agar mulai acuan baru setelah istirahat
+                    add_log(pair_key, "Selesai istirahat 2 menit. Bot aktif kembali!")
                     success, _, _, _, current_eq, _ = fetch_realtime_account()
-                    if success:
+                    if success and current_eq > 1000:
                         global_state["peak_equity"] = current_eq
                 else:
                     time.sleep(5)
@@ -384,28 +389,27 @@ def pair_trading_worker(pair_key):
                 success, idr_cash, btc_amt, usdt_amt, current_equity, err = fetch_realtime_account()
                 current_price = p_data["last_market_price"]
 
-                # Cek Penurunan Saldo (Drawdown) Total >= 3% dari Peak Equity
-                if global_state["peak_equity"] > 0 and current_equity < global_state["peak_equity"]:
-                    drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
-                    if drawdown >= MAX_DRAWDOWN_PCT:
-                        global_state["is_resting"] = True
-                        global_state["rest_until"] = time.time() + 300  # Istirahat 300 detik (5 menit)
-                        
-                        # Coba cairkan posisi darurat jika sedang memegang koin agar aman
-                        if p_data["in_position"]:
-                            target_amt = btc_amt if pair_key == "btcidr" else usdt_amt
-                            if target_amt > 0.00001:
-                                execute_real_order(pair_key, "sell", amount_coin=target_amt)
-                                p_data["in_position"] = False
-                        
-                        add_log(pair_key, f"⚠️ DRAWDOWN {drawdown*100:.2f}%! Istirahat 5 menit diaktifkan.")
-                        time.sleep(5)
-                        continue
+                if global_state["peak_equity"] > 1000 and current_equity > 1000:
+                    if current_equity < global_state["peak_equity"]:
+                        drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
+                        if drawdown >= MAX_DRAWDOWN_PCT:
+                            global_state["is_resting"] = True
+                            global_state["rest_until"] = time.time() + 120  # Diubah jadi 2 Menit (120 detik)
+                            
+                            if p_data["in_position"]:
+                                target_amt = btc_amt if pair_key == "btcidr" else usdt_amt
+                                if target_amt > 0.00001:
+                                    execute_real_order(pair_key, "sell", amount_coin=target_amt)
+                                    p_data["in_position"] = False
+                            
+                            add_log(pair_key, f"⚠️ DRAWDOWN {drawdown*100:.2f}%! Istirahat 2 menit.")
+                            time.sleep(5)
+                            continue
 
                 if success and current_price > 0:
                     if not p_data["in_position"]:
                         if pair_key == "btcidr" and idr_cash >= 10000:
-                            buy_idr = idr_cash  # ALL-IN 100% Saldo IDR
+                            buy_idr = idr_cash  
                             add_log(pair_key, f"ALL-IN BUY BTC Rp {buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=buy_idr)
                             if success_order:
@@ -416,7 +420,7 @@ def pair_trading_worker(pair_key):
                                 add_log(pair_key, f"Gagal All-In Buy: {res_data}")
 
                         elif pair_key == "usdtidr" and idr_cash >= 10000:
-                            buy_idr = idr_cash  # ALL-IN 100% Saldo IDR ke USDT
+                            buy_idr = idr_cash  
                             add_log(pair_key, f"ALL-IN BUY USDT Rp {buy_idr:,.0f}...")
                             execute_real_order(pair_key, "buy", amount_idr=buy_idr)
 
@@ -508,7 +512,8 @@ def handle_update(update):
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_home":
-            answer_callback(cb_id)
+            global_state["is_resting"] = False
+            answer_callback(cb_id, "Cooling down di-reset. Bot lanjut gas!")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_status":
@@ -547,12 +552,13 @@ def handle_update(update):
         chat_id = msg.get("chat", {}).get("id")
         text = (msg.get("text") or "").strip()
         if chat_id and (text.startswith("/start") or text.startswith("/menu")):
+            global_state["is_resting"] = False
             send_menu(chat_id, get_home_text(is_final=False))
 
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot All-In, Target 200rb & Safety 3% Berjalan...")
+    print("Bot All-In, Target 200rb & Cooling Down 2 Menit Berjalan...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
