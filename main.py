@@ -74,9 +74,8 @@ def telegram(method, params=None):
 
 def add_log(pair_key, text):
     timestamp = get_wib_time()
-    # Pastikan SEMOGA GACOR !! tetap di awal, log baru masuk di bawahnya
     p_logs = pairs_state[pair_key]["minute_logs"]
-    if "SEMOGA GACOR !!" not in p_logs:
+    if len(p_logs) == 0 or p_logs[0] != "SEMOGA GACOR !!":
         p_logs.appendleft("SEMOGA GACOR !!")
     p_logs.append(f"[{timestamp}] {text}")
 
@@ -256,7 +255,7 @@ def get_home_text():
         f"• Posisi: {btc_pos}\n"
         f"📊 REKAP BTC: Trade: {btc_p['total_trades']}x | Win: {btc_p['winning_trades']} | Lose: {btc_p['losing_trades']}\n"
         f"📋 LOG BTC:\n"
-        f"```{btc_logs}```\n"
+        f"```text\n{btc_logs}\n```\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"2️⃣ USDT/IDR | {usdt_p['price_trend']}\n"
         f"Status: {usdt_status}\n"
@@ -266,7 +265,7 @@ def get_home_text():
         f"• Posisi: {usdt_pos}\n"
         f"📊 REKAP USDT: Trade: {usdt_p['total_trades']}x | Win: {usdt_p['winning_trades']} | Lose: {usdt_p['losing_trades']}\n"
         f"📋 LOG USDT:\n"
-        f"```{usdt_logs}```"
+        f"```text\n{usdt_logs}\n```"
     )
 
 def auto_refresh_dashboard_loop():
