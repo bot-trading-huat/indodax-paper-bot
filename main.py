@@ -24,13 +24,11 @@ TOKEN = "8867024450:AAGaZU1bZgT7RQZLS9SRvUJr6wxTpUFinGs"
 INDODAX_API_KEY = "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK".strip()
 INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b".strip()
 
-# TARGET HARIAN, SAFETY LIMIT & ALOKASI DINAMIS
 DAILY_PROFIT_TARGET = 200000.0
-MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
+MAX_DRAWDOWN_PCT = 0.03
 
-# GLOBAL LOCKS & NONCE TRACKER
 nonce_lock = threading.Lock()
-buy_lock = threading.Lock()  # MENCEGAH BONK DAN BTC BUY BERSAMAAN
+buy_lock = threading.Lock()
 last_nonce = 0
 
 def get_next_nonce():
@@ -208,8 +206,8 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     }
     
     if side == "buy":
-        # Potong 1% + Rp 200 untuk fee & buffer pembulatan Indodax
-        safe_idr = int((amount_idr * 0.99) - 200)
+        # Safe buffer potong 1% + Rp 100 untuk fee transaksi
+        safe_idr = int((amount_idr * 0.99) - 100)
         if safe_idr < 10000:
             safe_idr = 10000
         params["idr"] = safe_idr
@@ -419,10 +417,7 @@ def pair_trading_worker(pair_key):
             if global_state["is_resting"]:
                 if time.time() >= global_state["rest_until"]:
                     global_state["is_resting"] = False
-                    add_log(pair_key, "Selesai istirahat 2 menit. Bot aktif kembali!")
-                    success, _, _, _, current_eq, _ = fetch_realtime_account()
-                    if success and current_eq > 1000:
-                        global_state["peak_equity"] = current_eq
+                    add_log(pair_key, "Selesai istirahat. Bot aktif kembali!")
                 else:
                     time.sleep(5)
                     continue
@@ -431,49 +426,33 @@ def pair_trading_worker(pair_key):
                 success, idr_cash, bonk_amt, btc_amt, current_equity, err = fetch_realtime_account()
                 current_price = p_data["last_market_price"]
 
-                # SINKRONISASI POSISI REALTIME
+                # SINKRONISASI POSISI
                 if pair_key == "bonk_idr":
                     p_data["in_position"] = (bonk_amt * current_price) >= 10000
                 elif pair_key == "btc_idr":
                     p_data["in_position"] = (btc_amt * current_price) >= 10000
 
-                # Management Drawdown Risk
-                if global_state["peak_equity"] > 1000 and current_equity > 1000:
-                    if current_equity < global_state["peak_equity"]:
-                        drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
-                        if drawdown >= MAX_DRAWDOWN_PCT:
-                            global_state["is_resting"] = True
-                            global_state["rest_until"] = time.time() + 120
-                            
-                            if p_data["in_position"]:
-                                target_amt = bonk_amt if pair_key == "bonk_idr" else btc_amt
-                                if target_amt > 0.00001:
-                                    execute_real_order(pair_key, "sell", amount_coin=target_amt)
-                                    p_data["in_position"] = False
-                            
-                            add_log(pair_key, f"⚠️ DRAWDOWN {drawdown*100:.2f}%! Istirahat 2 menit.")
-                            time.sleep(5)
-                            continue
-
                 if success and current_price > 0:
-                    # LOGIKA BUY (DENGAN LOCK MENCEGAH RACE CONDITION AKUN SAMA)
+                    # LOGIKA BUY: MENGGUNAKAN SALDO TERBAGI DENGAN BENAR
                     if not p_data["in_position"]:
                         with buy_lock:
-                            # Cek ulang saldo IDR bersih paling update sebelum order
-                            res_ok, latest_idr, _, _, _, _ = fetch_realtime_account()
-                            if res_ok and latest_idr >= 10000:
-                                other_pair_key = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
-                                other_in_pos = pairs_state[other_pair_key]["in_position"]
+                            # Re-fetch saldo IDR paling update saat giliran koin eksekusi
+                            res_ok, fresh_idr, fresh_bonk, fresh_btc, _, _ = fetch_realtime_account()
+                            
+                            if res_ok:
+                                other_pair = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
+                                other_in_pos = pairs_state[other_pair]["in_position"]
 
+                                # Jika pasangan koin sebelah BELUM beli koin, bagi saldo IDR yang ada 50%
                                 if not other_in_pos:
-                                    target_buy_idr = latest_idr * 0.50
+                                    allocated_idr = fresh_idr * 0.50
                                 else:
-                                    target_buy_idr = latest_idr
+                                    # Jika pasangan koin sebelah SUDAH beli koin, gunakan seluruh sisa IDR
+                                    allocated_idr = fresh_idr
 
-                                if target_buy_idr >= 10000:
-                                    actual_buy = min(target_buy_idr, latest_idr)
-                                    add_log(pair_key, f"BUY Rp {actual_buy:,.0f}...")
-                                    success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=actual_buy)
+                                if allocated_idr >= 10000:
+                                    add_log(pair_key, f"BUY Rp {allocated_idr:,.0f}...")
+                                    success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=allocated_idr)
                                     if success_order:
                                         p_data["buy_price"] = current_price
                                         p_data["in_position"] = True
@@ -488,7 +467,6 @@ def pair_trading_worker(pair_key):
 
                         price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
 
-                        # Take Profit 0.3% / Stop Loss -0.5%
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_bonk, current_btc, _, _ = fetch_realtime_account()
                             target_amt = current_bonk if pair_key == "bonk_idr" else current_btc
@@ -577,7 +555,7 @@ def handle_update(update):
             
         elif data == "btn_home":
             global_state["is_resting"] = False
-            answer_callback(cb_id, "Cooling down di-reset. Bot lanjut gas!")
+            answer_callback(cb_id, "Dashboard diperbarui.")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_status":
