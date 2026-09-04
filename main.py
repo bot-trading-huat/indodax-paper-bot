@@ -27,9 +27,9 @@ INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de
 # TARGET HARIAN, SAFETY LIMIT & ALOKASI DINAMIS
 DAILY_PROFIT_TARGET = 200000.0
 MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
-MIN_IDR_RESERVE = 0.0    # Saldo IDR minimal (diset 0 agar seluruh IDR bisa terpakai)
+MIN_IDR_RESERVE = 0.0
 
-# ALOKASI DINAMIS 50% - 50% UNTUK SKALABILITAS CUAN LEBIH BESAR
+# ALOKASI DINAMIS 50% - 50%
 ALLOCATION_RATIO_BONK = 0.50
 ALLOCATION_RATIO_BTC = 0.50
 
@@ -428,20 +428,19 @@ def pair_trading_worker(pair_key):
 
                 if success and current_price > 0:
                     if not p_data["in_position"]:
-                        # ALOKASI DINAMIS LOGIC: Membagi modal secara proporsional dari total IDR yang tersedia
-                        ratio = ALLOCATION_RATIO_BONK if pair_key == "bonkidr" else ALLOCATION_RATIO_BTC
-                        
-                        # Jika pair lain tidak sedang memegang koin (IDR utuh), pakai porsi ratio (50%)
-                        # Jika pair lain sedang memegang koin, gunakan seluruh sisa IDR yang ada
+                        # ALOKASI DINAMIS LOGIC DENGAN PERBAIKAN EKSEKUSI
                         other_pair_key = "btcidr" if pair_key == "bonkidr" else "bonkidr"
-                        if not pairs_state[other_pair_key]["in_position"]:
-                            allowed_buy_idr = idr_cash * ratio
+                        other_in_pos = pairs_state[other_pair_key]["in_position"]
+                        
+                        if not other_in_pos:
+                            allowed_buy_idr = current_equity * 0.50
                         else:
-                            allowed_buy_idr = idr_cash - MIN_IDR_RESERVE
+                            allowed_buy_idr = idr_cash
 
-                        if allowed_buy_idr >= 10000:  # Syarat minimal transaksi Indodax
-                            add_log(pair_key, f"BUY (50% Alokasi Dinamis) Rp {allowed_buy_idr:,.0f}...")
-                            success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=allowed_buy_idr)
+                        if allowed_buy_idr >= 10000 and idr_cash >= 10000:
+                            actual_buy = min(allowed_buy_idr, idr_cash)
+                            add_log(pair_key, f"BUY Rp {actual_buy:,.0f}...")
+                            success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=actual_buy)
                             if success_order:
                                 p_data["buy_price"] = current_price
                                 p_data["in_position"] = True
