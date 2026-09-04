@@ -29,6 +29,19 @@ DAILY_PROFIT_TARGET = 200000.0
 MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
 MIN_IDR_RESERVE = 0.0
 
+# GLOBAL NONCE TRACKER & LOCK
+nonce_lock = threading.Lock()
+last_nonce = 0
+
+def get_next_nonce():
+    global last_nonce
+    with nonce_lock:
+        current_nonce = int(time.time() * 1000)
+        if current_nonce <= last_nonce:
+            current_nonce = last_nonce + 1
+        last_nonce = current_nonce
+        return str(current_nonce)
+
 global_state = {
     "dashboard_chat_id": None,
     "last_active_msg_id": None,
@@ -123,7 +136,7 @@ def fetch_realtime_account():
     update_market_prices()
     
     url = "https://indodax.com/tapi"
-    nonce = str(int(time.time() * 1000))
+    nonce = get_next_nonce()
     params = {"method": "getInfo", "nonce": nonce}
     
     post_data = urllib.parse.urlencode(params).encode("utf-8")
@@ -179,10 +192,9 @@ def check_initial_positions():
 
 def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     url = "https://indodax.com/tapi"
-    nonce = str(int(time.time() * 1000))
+    nonce = get_next_nonce()
     current_price = pairs_state[pair_key]["last_market_price"]
     
-    # Indodax membutuhkan integer untuk parameter harga IDR
     price_val = int(current_price) if current_price >= 1 else current_price
     if price_val <= 0:
         price_val = 1000
@@ -194,8 +206,11 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
         "price": price_val,
         "nonce": nonce
     }
+    
     if side == "buy":
-        params["idr"] = int(amount_idr)
+        # Buffer 0.5% untuk mengantisipasi potongan fee Indodax agar saldo selalu cukup
+        safe_idr = int(amount_idr * 0.995)
+        params["idr"] = safe_idr
     else:
         symbol = pairs_state[pair_key]["symbol"]
         params[symbol] = f"{amount_coin:.8f}"
