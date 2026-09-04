@@ -25,7 +25,6 @@ INDODAX_API_KEY = "FHKI0WWQ-CREFEVQM-4NYKVNHQ-1HAGNSL4-EL9NWIEK".strip()
 INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de1ea3cec7e3961016f17d1b".strip()
 
 DAILY_PROFIT_TARGET = 200000.0
-MAX_DRAWDOWN_PCT = 0.03
 
 nonce_lock = threading.Lock()
 buy_lock = threading.Lock()
@@ -63,7 +62,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE AUTO-COMPOUND CUAN MAKSIMAL AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE AUTO-COMPOUND AKTIF !!"], maxlen=4),
     },
     "btc_idr": {
         "name": "BTC/IDR",
@@ -78,7 +77,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE AUTO-COMPOUND CUAN MAKSIMAL AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE AUTO-COMPOUND AKTIF !!"], maxlen=4),
     }
 }
 
@@ -154,7 +153,8 @@ def fetch_realtime_account():
                 balances = res.get("return", {}).get("balance", {})
                 balances_hold = res.get("return", {}).get("balance_hold", {})
                 
-                idr_cash = float(balances.get("idr", 0))
+                # Menghitung total saldo bebas + hold
+                idr_cash = float(balances.get("idr", 0)) + float(balances_hold.get("idr", 0))
                 bonk_amt = float(balances.get("bonk", 0)) + float(balances_hold.get("bonk", 0))
                 btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
                 
@@ -180,13 +180,13 @@ def check_initial_positions():
             pairs_state["bonk_idr"]["in_position"] = True
             if pairs_state["bonk_idr"]["buy_price"] == 0.0:
                 pairs_state["bonk_idr"]["buy_price"] = pairs_state["bonk_idr"]["last_market_price"]
-            add_log("bonk_idr", f"Terdeteksi saldo BONK awal ({bonk_amt:,.2f}), posisi diset aktif.")
+            add_log("bonk_idr", f"Aset BONK terdeteksi ({bonk_amt:,.2f} BONK)")
         
         if (btc_amt * pairs_state["btc_idr"]["last_market_price"]) >= 10000:
             pairs_state["btc_idr"]["in_position"] = True
             if pairs_state["btc_idr"]["buy_price"] == 0.0:
                 pairs_state["btc_idr"]["buy_price"] = pairs_state["btc_idr"]["last_market_price"]
-            add_log("btc_idr", f"Terdeteksi saldo BTC awal ({btc_amt:.8f}), posisi diset aktif.")
+            add_log("btc_idr", f"Aset BTC terdeteksi ({btc_amt:.8f} BTC)")
 
 def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     url = "https://indodax.com/tapi"
@@ -206,8 +206,8 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     }
     
     if side == "buy":
-        # Safe buffer potong 1% + Rp 100 untuk fee transaksi
-        safe_idr = int((amount_idr * 0.99) - 100)
+        # Aman potong 0.3% saja untuk fee
+        safe_idr = int(amount_idr * 0.997)
         if safe_idr < 10000:
             safe_idr = 10000
         params["idr"] = safe_idr
@@ -264,15 +264,7 @@ def get_home_text(is_final=False):
 
     now_wib = get_wib_time()
     
-    if global_state["is_resting"]:
-        sisa_waktu = int(global_state["rest_until"] - time.time())
-        if sisa_waktu > 0:
-            header_status = f"☕ ISTIRAHAT COOLING DOWN ({sisa_waktu}s)"
-        else:
-            global_state["is_resting"] = False
-            header_status = "🔥 TARGET 200RB/DAY (AUTO-COMPOUND)"
-    else:
-        header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY (AUTO-COMPOUND)"
+    header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY (50:50 BONK & BTC)"
 
     total_prof_today = pairs_state["bonk_idr"]["daily_profit_idr"] + pairs_state["btc_idr"]["daily_profit_idr"]
     target_progress = f"🎯 Profit Hari Ini: Rp {total_prof_today:,.0f} / Rp {DAILY_PROFIT_TARGET:,.0f}"
@@ -282,7 +274,7 @@ def get_home_text(is_final=False):
     bonk_price = bonk_p["last_market_price"]
     bonk_chart = "".join(bonk_p["chart_chars"])
     bonk_val = bonk_amt * bonk_price
-    bonk_pos = f"Aset Koin ({bonk_amt:,.2f} BONK)" if bonk_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
+    bonk_pos = f"Aset ({bonk_amt:,.2f} BONK)" if bonk_p["in_position"] else "Menunggu Beli (50% Saldo)"
     bonk_logs = "\n".join(bonk_p["minute_logs"])
 
     btc_p = pairs_state["btc_idr"]
@@ -290,7 +282,7 @@ def get_home_text(is_final=False):
     btc_price = btc_p["last_market_price"]
     btc_chart = "".join(btc_p["chart_chars"])
     btc_val = btc_amt * btc_price
-    btc_pos = f"Aset Koin ({btc_amt:.8f} BTC)" if btc_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
+    btc_pos = f"Aset ({btc_amt:.8f} BTC)" if btc_p["in_position"] else "Menunggu Beli (50% Saldo)"
     btc_logs = "\n".join(btc_p["minute_logs"])
 
     return (
@@ -324,10 +316,6 @@ def auto_refresh_dashboard_loop():
     while True:
         try:
             update_market_prices()
-            if global_state["is_resting"]:
-                time.sleep(5)
-                continue
-
             if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
                 new_text = get_home_text(is_final=False)
                 if new_text != global_state["last_rendered_text"]:
@@ -347,9 +335,6 @@ def auto_refresh_dashboard_loop():
 def minute_report_worker():
     while True:
         time.sleep(60)
-        if global_state["is_resting"]:
-            continue
-
         if global_state["dashboard_chat_id"] and global_state["last_active_msg_id"]:
             try:
                 final_text = get_home_text(is_final=True)
@@ -373,86 +358,44 @@ def minute_report_worker():
             except Exception as e:
                 print("Minute Report Worker Error:", e)
 
-def daily_midnight_report_worker():
-    while True:
-        now = datetime.now(WIB)
-        if now.hour == 0 and now.minute == 0:
-            if global_state["dashboard_chat_id"]:
-                b = pairs_state["bonk_idr"]
-                c = pairs_state["btc_idr"]
-                total_win = b['winning_trades'] + c['winning_trades']
-                total_lose = b['losing_trades'] + c['losing_trades']
-                total_trades = b['total_trades'] + c['total_trades']
-                total_daily_profit = b['daily_profit_idr'] + c['daily_profit_idr']
-
-                status_target = "✅ TARGET HARI INI TERCAPAI!" if total_daily_profit >= DAILY_PROFIT_TARGET else "⚠️ BELUM MENCAPAI TARGET"
-
-                report_msg = (
-                    f"🌙 *REKAP HARIAN (00:00 WIB)*\n"
-                    f"📅 Tanggal: {now.strftime('%d-%m-%Y')}\n\n"
-                    f"• Total Trade: {total_trades}x\n"
-                    f"• Win: {total_win} | Lose: {total_lose}\n"
-                    f"• **Total Profit: Rp {total_daily_profit:,.2f}**\n"
-                    f"• Status: {status_target}\n\n"
-                    f"_Bot mereset siklus profit untuk hari baru! Gas terus!_"
-                )
-                telegram("sendMessage", {
-                    "chat_id": str(global_state["dashboard_chat_id"]),
-                    "text": report_msg,
-                    "parse_mode": "Markdown"
-                })
-                b['daily_profit_idr'] = 0.0
-                c['daily_profit_idr'] = 0.0
-                b['total_trades'] = 0; b['winning_trades'] = 0; b['losing_trades'] = 0
-                c['total_trades'] = 0; c['winning_trades'] = 0; c['losing_trades'] = 0
-                global_state["peak_equity"] = 0.0
-            time.sleep(65)
-        time.sleep(15)
-
 def pair_trading_worker(pair_key):
     p_data = pairs_state[pair_key]
 
     while True:
         try:
-            if global_state["is_resting"]:
-                if time.time() >= global_state["rest_until"]:
-                    global_state["is_resting"] = False
-                    add_log(pair_key, "Selesai istirahat. Bot aktif kembali!")
-                else:
-                    time.sleep(5)
-                    continue
-
             if p_data["is_running"]:
-                success, idr_cash, bonk_amt, btc_amt, current_equity, err = fetch_realtime_account()
+                success, idr_cash, bonk_amt, btc_amt, total_equity, err = fetch_realtime_account()
                 current_price = p_data["last_market_price"]
 
-                # SINKRONISASI POSISI
+                # Synchronize position
                 if pair_key == "bonk_idr":
                     p_data["in_position"] = (bonk_amt * current_price) >= 10000
                 elif pair_key == "btc_idr":
                     p_data["in_position"] = (btc_amt * current_price) >= 10000
 
                 if success and current_price > 0:
-                    # LOGIKA BUY: MENGGUNAKAN SALDO TERBAGI DENGAN BENAR
+                    # LOGIKA BUY PRESISI (DIBAGI 2 DARI TOTAL MODAL Rp 90K)
                     if not p_data["in_position"]:
                         with buy_lock:
-                            # Re-fetch saldo IDR paling update saat giliran koin eksekusi
-                            res_ok, fresh_idr, fresh_bonk, fresh_btc, _, _ = fetch_realtime_account()
+                            res_ok, fresh_idr, fresh_bonk, fresh_btc, fresh_eq, _ = fetch_realtime_account()
                             
                             if res_ok:
                                 other_pair = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
                                 other_in_pos = pairs_state[other_pair]["in_position"]
 
-                                # Jika pasangan koin sebelah BELUM beli koin, bagi saldo IDR yang ada 50%
-                                if not other_in_pos:
-                                    allocated_idr = fresh_idr * 0.50
-                                else:
-                                    # Jika pasangan koin sebelah SUDAH beli koin, gunakan seluruh sisa IDR
-                                    allocated_idr = fresh_idr
+                                # Target per koin = 50% dari total Equity (Rp 90.000 / 2 = Rp 45.000)
+                                target_alloc = fresh_eq * 0.50
 
-                                if allocated_idr >= 10000:
-                                    add_log(pair_key, f"BUY Rp {allocated_idr:,.0f}...")
-                                    success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=allocated_idr)
+                                # Ambil mana yang terkecil antara IDR Tunai & Target Alokasi
+                                buy_amount = min(fresh_idr, target_alloc)
+
+                                # Jika pasangan koin sebelah sudah beli, pakai sisa IDR tunai yang ada
+                                if other_in_pos:
+                                    buy_amount = fresh_idr
+
+                                if buy_amount >= 10000:
+                                    add_log(pair_key, f"Proses BUY Rp {buy_amount:,.0f}...")
+                                    success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=buy_amount)
                                     if success_order:
                                         p_data["buy_price"] = current_price
                                         p_data["in_position"] = True
@@ -467,6 +410,7 @@ def pair_trading_worker(pair_key):
 
                         price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
 
+                        # Take Profit 0.3% / Stop Loss -0.5%
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_bonk, current_btc, _, _ = fetch_realtime_account()
                             target_amt = current_bonk if pair_key == "bonk_idr" else current_btc
@@ -554,7 +498,6 @@ def handle_update(update):
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_home":
-            global_state["is_resting"] = False
             answer_callback(cb_id, "Dashboard diperbarui.")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
@@ -594,7 +537,6 @@ def handle_update(update):
         chat_id = msg.get("chat", {}).get("id")
         text = (msg.get("text") or "").strip()
         if chat_id and (text.startswith("/start") or text.startswith("/menu")):
-            global_state["is_resting"] = False
             send_menu(chat_id, get_home_text(is_final=False))
 
 def polling():
@@ -622,5 +564,4 @@ if __name__ == "__main__":
     threading.Thread(target=pair_trading_worker, args=("btc_idr",), daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     threading.Thread(target=minute_report_worker, daemon=True).start()
-    threading.Thread(target=daily_midnight_report_worker, daemon=True).start()
     polling()
