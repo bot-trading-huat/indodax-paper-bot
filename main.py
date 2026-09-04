@@ -29,10 +29,6 @@ DAILY_PROFIT_TARGET = 200000.0
 MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
 MIN_IDR_RESERVE = 0.0
 
-# ALOKASI DINAMIS 50% - 50%
-ALLOCATION_RATIO_BONK = 0.50
-ALLOCATION_RATIO_BTC = 0.50
-
 global_state = {
     "dashboard_chat_id": None,
     "last_active_msg_id": None,
@@ -43,7 +39,7 @@ global_state = {
 }
 
 pairs_state = {
-    "bonkidr": {
+    "bonk_idr": {
         "name": "BONK/IDR",
         "symbol": "bonk",
         "is_running": True,
@@ -58,7 +54,7 @@ pairs_state = {
         "chart_chars": deque(["—"]*10, maxlen=10),
         "minute_logs": deque(["🔥 MODE AUTO-COMPOUND CUAN MAKSIMAL AKTIF !!"], maxlen=4),
     },
-    "btcidr": {
+    "btc_idr": {
         "name": "BTC/IDR",
         "symbol": "btc",
         "is_running": True,
@@ -151,8 +147,8 @@ def fetch_realtime_account():
                 bonk_amt = float(balances.get("bonk", 0)) + float(balances_hold.get("bonk", 0))
                 btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
                 
-                bonk_val = bonk_amt * pairs_state["bonkidr"]["last_market_price"]
-                btc_val = btc_amt * pairs_state["btcidr"]["last_market_price"]
+                bonk_val = bonk_amt * pairs_state["bonk_idr"]["last_market_price"]
+                btc_val = btc_amt * pairs_state["btc_idr"]["last_market_price"]
                 
                 grand_total = idr_cash + bonk_val + btc_val
                 
@@ -170,16 +166,16 @@ def check_initial_positions():
     success, _, bonk_amt, btc_amt, _, _ = fetch_realtime_account()
     if success:
         if bonk_amt > 1.0:
-            pairs_state["bonkidr"]["in_position"] = True
-            if pairs_state["bonkidr"]["buy_price"] == 0.0:
-                pairs_state["bonkidr"]["buy_price"] = pairs_state["bonkidr"]["last_market_price"]
-            add_log("bonkidr", f"Terdeteksi saldo BONK awal ({bonk_amt:,.2f}), posisi diset aktif.")
+            pairs_state["bonk_idr"]["in_position"] = True
+            if pairs_state["bonk_idr"]["buy_price"] == 0.0:
+                pairs_state["bonk_idr"]["buy_price"] = pairs_state["bonk_idr"]["last_market_price"]
+            add_log("bonk_idr", f"Terdeteksi saldo BONK awal ({bonk_amt:,.2f}), posisi diset aktif.")
         
         if btc_amt > 0.00001:
-            pairs_state["btcidr"]["in_position"] = True
-            if pairs_state["btcidr"]["buy_price"] == 0.0:
-                pairs_state["btcidr"]["buy_price"] = pairs_state["btcidr"]["last_market_price"]
-            add_log("btcidr", f"Terdeteksi saldo BTC awal ({btc_amt:.8f}), posisi diset aktif.")
+            pairs_state["btc_idr"]["in_position"] = True
+            if pairs_state["btc_idr"]["buy_price"] == 0.0:
+                pairs_state["btc_idr"]["buy_price"] = pairs_state["btc_idr"]["last_market_price"]
+            add_log("btc_idr", f"Terdeteksi saldo BTC awal ({btc_amt:.8f}), posisi diset aktif.")
 
 def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     url = "https://indodax.com/tapi"
@@ -215,14 +211,14 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
         return False, str(e)
 
 def get_main_keyboard():
-    bonk_running = pairs_state["bonkidr"]["is_running"]
-    btc_running = pairs_state["btcidr"]["is_running"]
+    bonk_running = pairs_state["bonk_idr"]["is_running"]
+    btc_running = pairs_state["btc_idr"]["is_running"]
     
     return {
         "inline_keyboard": [
             [
-                {"text": f"{'⏹ Hentikan BONK' if bonk_running else '▶️ Jalankan BONK'}", "callback_data": "toggle_bonkidr"},
-                {"text": f"{'⏹ Hentikan BTC' if btc_running else '▶️ Jalankan BTC'}", "callback_data": "toggle_btcidr"}
+                {"text": f"{'⏹ Hentikan BONK' if bonk_running else '▶️ Jalankan BONK'}", "callback_data": "toggle_bonk_idr"},
+                {"text": f"{'⏹ Hentikan BTC' if btc_running else '▶️ Jalankan BTC'}", "callback_data": "toggle_btc_idr"}
             ],
             [{"text": "🔄 Paksa Sell/Cairkan Aset ke IDR", "callback_data": "btn_liquidate"}],
             [{"text": "📊 Status Lengkap & Saldo", "callback_data": "btn_status"}],
@@ -254,10 +250,10 @@ def get_home_text(is_final=False):
     else:
         header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY (AUTO-COMPOUND)"
 
-    total_prof_today = pairs_state["bonkidr"]["daily_profit_idr"] + pairs_state["btcidr"]["daily_profit_idr"]
+    total_prof_today = pairs_state["bonk_idr"]["daily_profit_idr"] + pairs_state["btc_idr"]["daily_profit_idr"]
     target_progress = f"🎯 Profit Hari Ini: Rp {total_prof_today:,.0f} / Rp {DAILY_PROFIT_TARGET:,.0f}"
 
-    bonk_p = pairs_state["bonkidr"]
+    bonk_p = pairs_state["bonk_idr"]
     bonk_status = "🟢 Aktif" if bonk_p["is_running"] else "🔴 Berhenti"
     bonk_price = bonk_p["last_market_price"]
     bonk_chart = "".join(bonk_p["chart_chars"])
@@ -265,7 +261,7 @@ def get_home_text(is_final=False):
     bonk_pos = f"Aset Koin ({bonk_amt:,.2f} BONK)" if bonk_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
     bonk_logs = "\n".join(bonk_p["minute_logs"])
 
-    btc_p = pairs_state["btcidr"]
+    btc_p = pairs_state["btc_idr"]
     btc_status = "🟢 Aktif" if btc_p["is_running"] else "🔴 Berhenti"
     btc_price = btc_p["last_market_price"]
     btc_chart = "".join(btc_p["chart_chars"])
@@ -358,8 +354,8 @@ def daily_midnight_report_worker():
         now = datetime.now(WIB)
         if now.hour == 0 and now.minute == 0:
             if global_state["dashboard_chat_id"]:
-                b = pairs_state["bonkidr"]
-                c = pairs_state["btcidr"]
+                b = pairs_state["bonk_idr"]
+                c = pairs_state["btc_idr"]
                 total_win = b['winning_trades'] + c['winning_trades']
                 total_lose = b['losing_trades'] + c['losing_trades']
                 total_trades = b['total_trades'] + c['total_trades']
@@ -417,7 +413,7 @@ def pair_trading_worker(pair_key):
                             global_state["rest_until"] = time.time() + 120  # 2 Menit Cooling Down
                             
                             if p_data["in_position"]:
-                                target_amt = bonk_amt if pair_key == "bonkidr" else btc_amt
+                                target_amt = bonk_amt if pair_key == "bonk_idr" else btc_amt
                                 if target_amt > 0.00001:
                                     execute_real_order(pair_key, "sell", amount_coin=target_amt)
                                     p_data["in_position"] = False
@@ -428,8 +424,7 @@ def pair_trading_worker(pair_key):
 
                 if success and current_price > 0:
                     if not p_data["in_position"]:
-                        # ALOKASI DINAMIS LOGIC DENGAN PERBAIKAN EKSEKUSI
-                        other_pair_key = "btcidr" if pair_key == "bonkidr" else "bonkidr"
+                        other_pair_key = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
                         other_in_pos = pairs_state[other_pair_key]["in_position"]
                         
                         if not other_in_pos:
@@ -456,7 +451,7 @@ def pair_trading_worker(pair_key):
 
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_bonk, current_btc, _, _ = fetch_realtime_account()
-                            target_amt = current_bonk if pair_key == "bonkidr" else current_btc
+                            target_amt = current_bonk if pair_key == "bonk_idr" else current_btc
                             
                             if target_amt > 0.00001:
                                 add_log(pair_key, f"Mencoba SELL ({price_change_pct*100:.2f}%)")
@@ -517,17 +512,17 @@ def handle_update(update):
         msg_id = cb["message"]["message_id"]
         data = cb.get("data", "")
 
-        if data == "toggle_bonkidr":
-            p = pairs_state["bonkidr"]
+        if data == "toggle_bonk_idr":
+            p = pairs_state["bonk_idr"]
             p["is_running"] = not p["is_running"]
-            add_log("bonkidr", f"Bot BONK {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
+            add_log("bonk_idr", f"Bot BONK {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
             answer_callback(cb_id, f"BONK Bot: {'Aktif' if p['is_running'] else 'Berhenti'}")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
-        elif data == "toggle_btcidr":
-            p = pairs_state["btcidr"]
+        elif data == "toggle_btc_idr":
+            p = pairs_state["btc_idr"]
             p["is_running"] = not p["is_running"]
-            add_log("btcidr", f"Bot BTC {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
+            add_log("btc_idr", f"Bot BTC {'diaktifkan' if p['is_running'] else 'dihentikan'}.")
             answer_callback(cb_id, f"BTC Bot: {'Aktif' if p['is_running'] else 'Berhenti'}")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
 
@@ -535,9 +530,9 @@ def handle_update(update):
             answer_callback(cb_id, "Memaksa cairkan seluruh aset ke IDR...")
             success, _, bonk_amt, btc_amt, _, _ = fetch_realtime_account()
             if bonk_amt > 1.0:
-                execute_real_order("bonkidr", "sell", amount_coin=bonk_amt)
+                execute_real_order("bonk_idr", "sell", amount_coin=bonk_amt)
             if btc_amt > 0.00001:
-                execute_real_order("btcidr", "sell", amount_coin=btc_amt)
+                execute_real_order("btc_idr", "sell", amount_coin=btc_amt)
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_home":
@@ -560,8 +555,8 @@ def handle_update(update):
             
         elif data == "btn_report":
             answer_callback(cb_id)
-            b = pairs_state["bonkidr"]
-            c = pairs_state["btcidr"]
+            b = pairs_state["bonk_idr"]
+            c = pairs_state["btc_idr"]
             total_prof = b['daily_profit_idr'] + c['daily_profit_idr']
             report_text = (
                 f"📈 *LAPORAN TARGET PROFIT HARIAN*\n\n"
@@ -605,8 +600,8 @@ if __name__ == "__main__":
     update_market_prices()
     check_initial_positions()
 
-    threading.Thread(target=pair_trading_worker, args=("bonkidr",), daemon=True).start()
-    threading.Thread(target=pair_trading_worker, args=("btcidr",), daemon=True).start()
+    threading.Thread(target=pair_trading_worker, args=("bonk_idr",), daemon=True).start()
+    threading.Thread(target=pair_trading_worker, args=("btc_idr",), daemon=True).start()
     threading.Thread(target=auto_refresh_dashboard_loop, daemon=True).start()
     threading.Thread(target=minute_report_worker, daemon=True).start()
     threading.Thread(target=daily_midnight_report_worker, daemon=True).start()
