@@ -26,8 +26,8 @@ INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de
 
 # TARGET HARIAN & SAFETY LIMIT
 DAILY_PROFIT_TARGET = 200000.0
-MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
-MIN_IDR_RESERVE = 15000.0 # Saldo IDR minimal yang wajib disisakan (tidak di-all-in kan)
+MAX_DRAWDOWN_PCT = 0.03  
+MIN_IDR_RESERVE = 15000.0 
 
 global_state = {
     "dashboard_chat_id": None,
@@ -52,7 +52,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE AMAN & CADANGAN 15K AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE BOT INDODAX AKTIF !!"], maxlen=4),
     },
     "usdtidr": {
         "name": "USDT/IDR",
@@ -67,7 +67,7 @@ pairs_state = {
         "last_market_price": 0.0,
         "price_trend": "⏺",
         "chart_chars": deque(["—"]*10, maxlen=10),
-        "minute_logs": deque(["🔥 MODE AMAN & CADANGAN 15K AKTIF !!"], maxlen=4),
+        "minute_logs": deque(["🔥 MODE BOT INDODAX AKTIF !!"], maxlen=4),
     }
 }
 
@@ -85,37 +85,43 @@ def telegram(method, params=None):
 def add_log(pair_key, text):
     timestamp = get_wib_time()
     p_logs = pairs_state[pair_key]["minute_logs"]
-    if len(p_logs) == 0 or "MODE AMAN" in p_logs[0]:
-        p_logs.appendleft("KEJAR TARGET 200K dengan CADANGAN AMAN !!")
+    if len(p_logs) == 0 or "MODE BOT" in p_logs[0]:
+        p_logs.appendleft("MONITORING PASAR & EKSEKUSI TRADING...")
     p_logs.append(f"[{timestamp}] {text}")
+
+def get_coin_price_in_idr(coin_symbol):
+    pair = f"{coin_symbol.lower()}idr"
+    try:
+        ts = int(time.time() * 1000)
+        url = f"https://indodax.com/api/ticker/{pair}?ts={ts}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return float(data.get("ticker", {}).get("last", 0))
+    except Exception:
+        return 0.0
 
 def update_market_prices():
     for pair_key, p_data in pairs_state.items():
         try:
-            ts = int(time.time() * 1000)
-            url = f"https://indodax.com/api/ticker/{pair_key}?ts={ts}"
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                price = float(data.get("ticker", {}).get("last", 0))
-                
-                if price > 0:
-                    old_price = p_data["last_market_price"]
-                    if old_price > 0:
-                        if price > old_price:
-                            p_data["price_trend"] = "🔺"
-                            char = "▇"
-                        elif price < old_price:
-                            p_data["price_trend"] = "🔻"
-                            char = "▂"
-                        else:
-                            p_data["price_trend"] = "⏺️"
-                            char = "—"
+            price = get_coin_price_in_idr(p_data["symbol"])
+            if price > 0:
+                old_price = p_data["last_market_price"]
+                if old_price > 0:
+                    if price > old_price:
+                        p_data["price_trend"] = "🔺"
+                        char = "▇"
+                    elif price < old_price:
+                        p_data["price_trend"] = "🔻"
+                        char = "▂"
                     else:
+                        p_data["price_trend"] = "⏺️"
                         char = "—"
-                    
-                    p_data["chart_chars"].append(char)
-                    p_data["last_market_price"] = price
+                else:
+                    char = "—"
+                
+                p_data["chart_chars"].append(char)
+                p_data["last_market_price"] = price
         except Exception:
             pass
 
@@ -150,20 +156,40 @@ def fetch_realtime_account():
                 bonk_val = bonk_amt * pairs_state["bonkidr"]["last_market_price"]
                 usdt_val = usdt_amt * pairs_state["usdtidr"]["last_market_price"]
                 
-                grand_total = idr_cash + bonk_val + usdt_val
+                # Menghitung estimasi Rupiah untuk koin lain secara otomatis
+                other_balances_list = []
+                other_coins_total_val = 0.0
+
+                all_keys = set(list(balances.keys()) + list(balances_hold.keys()))
+                for coin in all_keys:
+                    if coin in ["idr", "bonk", "usdt"]:
+                        continue
+                    total_coin = float(balances.get(coin, 0)) + float(balances_hold.get(coin, 0))
+                    if total_coin > 0:
+                        coin_price = get_coin_price_in_idr(coin)
+                        coin_val_idr = total_coin * coin_price
+                        other_coins_total_val += coin_val_idr
+                        
+                        if coin_val_idr > 0:
+                            other_balances_list.append(f"{coin.upper()}: {total_coin:,.4f} (~Rp {coin_val_idr:,.0f})")
+                        else:
+                            other_balances_list.append(f"{coin.upper()}: {total_coin:,.4f}")
+
+                # Total Estimasi Keseluruhan Aset
+                grand_total = idr_cash + bonk_val + usdt_val + other_coins_total_val
                 
                 if grand_total > 1000:
                     if global_state["peak_equity"] == 0.0 or grand_total > global_state["peak_equity"]:
                         global_state["peak_equity"] = grand_total
                     
-                return True, idr_cash, bonk_amt, usdt_amt, grand_total, "OK"
+                return True, idr_cash, bonk_amt, usdt_amt, bonk_val, usdt_val, other_balances_list, grand_total, "OK"
             else:
-                return False, 0.0, 0.0, 0.0, 0.0, res.get("error", "API Error")
+                return False, 0.0, 0.0, 0.0, 0.0, 0.0, [], 0.0, res.get("error", "API Error")
     except Exception as e:
-        return False, 0.0, 0.0, 0.0, 0.0, str(e)
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0, [], 0.0, str(e)
 
 def check_initial_positions():
-    success, _, bonk_amt, usdt_amt, _, _ = fetch_realtime_account()
+    success, _, bonk_amt, usdt_amt, _, _, _, _, _ = fetch_realtime_account()
     if success:
         if bonk_amt > 1.0:
             pairs_state["bonkidr"]["in_position"] = True
@@ -234,7 +260,7 @@ def get_back_keyboard():
     }
 
 def get_home_text(is_final=False):
-    success, idr_bal, bonk_amt, usdt_amt, total_equity, err = fetch_realtime_account()
+    success, idr_bal, bonk_amt, usdt_amt, bonk_val, usdt_val, other_list, total_equity, err = fetch_realtime_account()
     if not success:
         return f"❌ *GAGAL KONEKSI API INDODAX:* `{err}`"
 
@@ -246,18 +272,19 @@ def get_home_text(is_final=False):
             header_status = f"☕ ISTIRAHAT COOLING DOWN ({sisa_waktu}s)"
         else:
             global_state["is_resting"] = False
-            header_status = "🔥 TARGET 200RB/DAY (CADANGAN AMAN)"
+            header_status = "🔥 BOT TRADING INDODAX AKTIF"
     else:
-        header_status = "🏁 FINAL" if is_final else "🔥 TARGET 200RB/DAY (CADANGAN AMAN)"
+        header_status = "🏁 FINAL" if is_final else "🔥 BOT TRADING INDODAX AKTIF"
 
     total_prof_today = pairs_state["bonkidr"]["daily_profit_idr"] + pairs_state["usdtidr"]["daily_profit_idr"]
     target_progress = f"🎯 Profit Hari Ini: Rp {total_prof_today:,.0f} / Rp {DAILY_PROFIT_TARGET:,.0f}"
+
+    other_text = f"\n • 📦 Koin Lain : {', '.join(other_list)}" if other_list else ""
 
     bonk_p = pairs_state["bonkidr"]
     bonk_status = "🟢 Aktif" if bonk_p["is_running"] else "🔴 Berhenti"
     bonk_price = bonk_p["last_market_price"]
     bonk_chart = "".join(bonk_p["chart_chars"])
-    bonk_val = bonk_amt * bonk_price
     bonk_pos = f"Aset Koin ({bonk_amt:,.2f} BONK)" if bonk_p["in_position"] else f"IDR Ready (Rp {idr_bal:,.0f})"
     bonk_logs = "\n".join(bonk_p["minute_logs"])
 
@@ -265,13 +292,17 @@ def get_home_text(is_final=False):
     usdt_status = "🟢 Aktif" if usdt_p["is_running"] else "🔴 Berhenti"
     usdt_price = usdt_p["last_market_price"]
     usdt_chart = "".join(usdt_p["chart_chars"])
-    usdt_val = usdt_amt * usdt_price
     usdt_pos = f"Aset Koin ({usdt_amt:,.2f} USDT)" if usdt_p["in_position"] else f"USDT Ready ({usdt_amt:,.2f} USDT)"
     usdt_logs = "\n".join(usdt_p["minute_logs"])
 
     return (
         f"{header_status}\n"
-        f"💰 TOTAL EQUITY: Rp {total_equity:,.2f}\n"
+        f"💰 **TOTAL ESTIMASI SALDO INDODAX:** Rp {total_equity:,.2f}\n"
+        f"💼 **RINCIAN SELURUH ASET:**\n"
+        f" • 💵 Saldo IDR Tunai : Rp {idr_bal:,.2f}\n"
+        f" • 🪙 Aset BONK       : Rp {bonk_val:,.2f} ({bonk_amt:,.2f} BONK)\n"
+        f" • 💵 Aset USDT       : Rp {usdt_val:,.2f} ({usdt_amt:,.2f} USDT)"
+        f"{other_text}\n"
         f"{target_progress}\n"
         f"Jam : ⏱ {now_wib}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -394,7 +425,7 @@ def pair_trading_worker(pair_key):
                 if time.time() >= global_state["rest_until"]:
                     global_state["is_resting"] = False
                     add_log(pair_key, "Selesai istirahat 2 menit. Bot aktif kembali!")
-                    success, _, _, _, current_eq, _ = fetch_realtime_account()
+                    success, _, _, _, _, _, _, current_eq, _ = fetch_realtime_account()
                     if success and current_eq > 1000:
                         global_state["peak_equity"] = current_eq
                 else:
@@ -402,7 +433,7 @@ def pair_trading_worker(pair_key):
                     continue
 
             if p_data["is_running"]:
-                success, idr_cash, bonk_amt, usdt_amt, current_equity, err = fetch_realtime_account()
+                success, idr_cash, bonk_amt, usdt_amt, _, _, _, current_equity, err = fetch_realtime_account()
                 current_price = p_data["last_market_price"]
 
                 if global_state["peak_equity"] > 1000 and current_equity > 1000:
@@ -410,7 +441,7 @@ def pair_trading_worker(pair_key):
                         drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
                         if drawdown >= MAX_DRAWDOWN_PCT:
                             global_state["is_resting"] = True
-                            global_state["rest_until"] = time.time() + 120  # 2 Menit Cooling Down
+                            global_state["rest_until"] = time.time() + 120  
                             
                             if p_data["in_position"]:
                                 target_amt = bonk_amt if pair_key == "bonkidr" else usdt_amt
@@ -425,10 +456,9 @@ def pair_trading_worker(pair_key):
 
                 if success and current_price > 0:
                     if not p_data["in_position"]:
-                        # Hanya beli jika sisa IDR setelah dikurangi cadangan masih mencukupi minimal Rp 10.000
                         allowed_buy_idr = idr_cash - MIN_IDR_RESERVE
                         if allowed_buy_idr >= 10000:
-                            add_log(pair_key, f"BUY dengan dana Rp {allowed_buy_idr:,.0f} (Cadangan Rp {MIN_IDR_RESERVE:,.0f} disisakan)...")
+                            add_log(pair_key, f"BUY dengan dana Rp {allowed_buy_idr:,.0f}...")
                             success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=allowed_buy_idr)
                             if success_order:
                                 p_data["buy_price"] = current_price
@@ -444,7 +474,7 @@ def pair_trading_worker(pair_key):
                         price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
 
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
-                            success, _, current_bonk, current_usdt, _, _ = fetch_realtime_account()
+                            success, _, current_bonk, current_usdt, _, _, _, _, _ = fetch_realtime_account()
                             target_amt = current_bonk if pair_key == "bonkidr" else current_usdt
                             min_check = 1.0 if pair_key == "bonkidr" else 0.00001
                             
@@ -523,7 +553,7 @@ def handle_update(update):
 
         elif data == "btn_liquidate":
             answer_callback(cb_id, "Memaksa cairkan seluruh aset ke IDR...")
-            success, _, bonk_amt, usdt_amt, _, _ = fetch_realtime_account()
+            success, _, bonk_amt, usdt_amt, _, _, _, _, _ = fetch_realtime_account()
             if bonk_amt > 1.0:
                 execute_real_order("bonkidr", "sell", amount_coin=bonk_amt)
             if usdt_amt > 0.00001:
@@ -532,18 +562,20 @@ def handle_update(update):
             
         elif data == "btn_home":
             global_state["is_resting"] = False
-            answer_callback(cb_id, "Cooling down di-reset. Bot lanjut gas!")
+            answer_callback(cb_id, "Dashboard diperbarui!")
             update_menu(chat_id, msg_id, get_home_text(is_final=False), is_home=True)
             
         elif data == "btn_status":
             answer_callback(cb_id)
-            success, idr, bonk, usdt, eq, _ = fetch_realtime_account()
+            success, idr, bonk, usdt, bonk_val, usdt_val, other_list, eq, _ = fetch_realtime_account()
+            other_str = f"\n• Koin Lain: {', '.join(other_list)}" if other_list else ""
             status_text = (
                 f"📊 *STATUS & SALDO AKUN LENGKAP*\n\n"
                 f"• IDR Tunai: Rp {idr:,.2f}\n"
-                f"• Saldo BONK: {bonk:,.2f} BONK\n"
-                f"• Saldo USDT: {usdt:,.2f} USDT\n"
-                f"• **TOTAL KESELURUHAN (EQUITY): Rp {eq:,.2f}**\n"
+                f"• Saldo BONK: {bonk:,.2f} BONK (Rp {bonk_val:,.2f})\n"
+                f"• Saldo USDT: {usdt:,.2f} USDT (Rp {usdt_val:,.2f})"
+                f"{other_str}\n\n"
+                f"• **TOTAL ESTIMASI SALDO: Rp {eq:,.2f}**\n"
                 f"• **Peak Equity Hari Ini:** Rp {global_state['peak_equity']:,.2f}"
             )
             update_menu(chat_id, msg_id, status_text, is_home=False)
@@ -577,7 +609,7 @@ def handle_update(update):
 def polling():
     offset = None
     telegram("deleteWebhook", {"drop_pending_updates": "false"})
-    print("Bot Final dengan Proteksi Cadangan Saldo IDR Berjalan...")
+    print("Bot Indodax Berjalan...")
     while True:
         try:
             params = {"timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])}
