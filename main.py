@@ -27,10 +27,10 @@ INDODAX_SECRET_KEY = "431cdf95bf07326082fa4a271bd120b600f0cc13b4beca9248320a69de
 # TARGET HARIAN, SAFETY LIMIT & ALOKASI DINAMIS
 DAILY_PROFIT_TARGET = 200000.0
 MAX_DRAWDOWN_PCT = 0.03  # Batas loss 3% sebelum istirahat
-MIN_IDR_RESERVE = 0.0
 
-# GLOBAL NONCE TRACKER & LOCK
+# GLOBAL LOCKS & NONCE TRACKER
 nonce_lock = threading.Lock()
+buy_lock = threading.Lock()  # MENCEGAH BONK DAN BTC BUY BERSAMAAN
 last_nonce = 0
 
 def get_next_nonce():
@@ -156,7 +156,7 @@ def fetch_realtime_account():
                 balances = res.get("return", {}).get("balance", {})
                 balances_hold = res.get("return", {}).get("balance_hold", {})
                 
-                idr_cash = float(balances.get("idr", 0)) + float(balances_hold.get("idr", 0))
+                idr_cash = float(balances.get("idr", 0))
                 bonk_amt = float(balances.get("bonk", 0)) + float(balances_hold.get("bonk", 0))
                 btc_amt = float(balances.get("btc", 0)) + float(balances_hold.get("btc", 0))
                 
@@ -208,8 +208,8 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     }
     
     if side == "buy":
-        # Buffer 1% + potong Rp 100 untuk mengantisipasi fee & pembulatan koma Indodax
-        safe_idr = int((amount_idr * 0.99) - 100)
+        # Potong 1% + Rp 200 untuk fee & buffer pembulatan Indodax
+        safe_idr = int((amount_idr * 0.99) - 200)
         if safe_idr < 10000:
             safe_idr = 10000
         params["idr"] = safe_idr
@@ -456,26 +456,30 @@ def pair_trading_worker(pair_key):
                             continue
 
                 if success and current_price > 0:
-                    # LOGIKA BUY
+                    # LOGIKA BUY (DENGAN LOCK MENCEGAH RACE CONDITION AKUN SAMA)
                     if not p_data["in_position"]:
-                        other_pair_key = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
-                        other_in_pos = pairs_state[other_pair_key]["in_position"]
+                        with buy_lock:
+                            # Cek ulang saldo IDR bersih paling update sebelum order
+                            res_ok, latest_idr, _, _, _, _ = fetch_realtime_account()
+                            if res_ok and latest_idr >= 10000:
+                                other_pair_key = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
+                                other_in_pos = pairs_state[other_pair_key]["in_position"]
 
-                        if not other_in_pos:
-                            target_buy_idr = idr_cash * 0.50
-                        else:
-                            target_buy_idr = idr_cash
+                                if not other_in_pos:
+                                    target_buy_idr = latest_idr * 0.50
+                                else:
+                                    target_buy_idr = latest_idr
 
-                        if idr_cash >= 10000 and target_buy_idr >= 10000:
-                            actual_buy = min(target_buy_idr, idr_cash)
-                            add_log(pair_key, f"BUY Rp {actual_buy:,.0f}...")
-                            success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=actual_buy)
-                            if success_order:
-                                p_data["buy_price"] = current_price
-                                p_data["in_position"] = True
-                                add_log(pair_key, f"BUY SUKSES @ Rp {current_price:,.2f}")
-                            else:
-                                add_log(pair_key, f"Gagal Buy: {res_data}")
+                                if target_buy_idr >= 10000:
+                                    actual_buy = min(target_buy_idr, latest_idr)
+                                    add_log(pair_key, f"BUY Rp {actual_buy:,.0f}...")
+                                    success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=actual_buy)
+                                    if success_order:
+                                        p_data["buy_price"] = current_price
+                                        p_data["in_position"] = True
+                                        add_log(pair_key, f"BUY SUKSES @ Rp {current_price:,.2f}")
+                                    else:
+                                        add_log(pair_key, f"Gagal Buy: {res_data}")
 
                     # LOGIKA SELL
                     elif p_data["in_position"]:
