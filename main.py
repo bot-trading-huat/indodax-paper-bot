@@ -178,13 +178,13 @@ def fetch_realtime_account():
 def check_initial_positions():
     success, _, bonk_amt, btc_amt, _, _ = fetch_realtime_account()
     if success:
-        if bonk_amt > 1.0:
+        if (bonk_amt * pairs_state["bonk_idr"]["last_market_price"]) >= 10000:
             pairs_state["bonk_idr"]["in_position"] = True
             if pairs_state["bonk_idr"]["buy_price"] == 0.0:
                 pairs_state["bonk_idr"]["buy_price"] = pairs_state["bonk_idr"]["last_market_price"]
             add_log("bonk_idr", f"Terdeteksi saldo BONK awal ({bonk_amt:,.2f}), posisi diset aktif.")
         
-        if btc_amt > 0.00001:
+        if (btc_amt * pairs_state["btc_idr"]["last_market_price"]) >= 10000:
             pairs_state["btc_idr"]["in_position"] = True
             if pairs_state["btc_idr"]["buy_price"] == 0.0:
                 pairs_state["btc_idr"]["buy_price"] = pairs_state["btc_idr"]["last_market_price"]
@@ -208,7 +208,7 @@ def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     }
     
     if side == "buy":
-        # Buffer 0.5% untuk mengantisipasi potongan fee Indodax agar saldo selalu cukup
+        # Buffer 0.5% untuk mengantisipasi potongan fee Indodax
         safe_idr = int(amount_idr * 0.995)
         params["idr"] = safe_idr
     else:
@@ -428,6 +428,13 @@ def pair_trading_worker(pair_key):
                 success, idr_cash, bonk_amt, btc_amt, current_equity, err = fetch_realtime_account()
                 current_price = p_data["last_market_price"]
 
+                # SINKRONISASI STATUS POSISI SECARA REALTIME SESUAI AKUN INDODAX
+                if pair_key == "bonk_idr":
+                    p_data["in_position"] = (bonk_amt * current_price) >= 10000
+                elif pair_key == "btc_idr":
+                    p_data["in_position"] = (btc_amt * current_price) >= 10000
+
+                # Management Drawdown Risk
                 if global_state["peak_equity"] > 1000 and current_equity > 1000:
                     if current_equity < global_state["peak_equity"]:
                         drawdown = (global_state["peak_equity"] - current_equity) / global_state["peak_equity"]
@@ -446,17 +453,20 @@ def pair_trading_worker(pair_key):
                             continue
 
                 if success and current_price > 0:
+                    # LOGIKA BUY DENGAN PERSENTASE DARI SALDO TUNAI ASLI
                     if not p_data["in_position"]:
                         other_pair_key = "btc_idr" if pair_key == "bonk_idr" else "bonk_idr"
                         other_in_pos = pairs_state[other_pair_key]["in_position"]
-                        
-                        if not other_in_pos:
-                            allowed_buy_idr = current_equity * 0.50
-                        else:
-                            allowed_buy_idr = idr_cash
 
-                        if allowed_buy_idr >= 10000 and idr_cash >= 10000:
-                            actual_buy = min(allowed_buy_idr, idr_cash)
+                        # Jika koin sebelah belum beli, bagi 50%. Jika koin sebelah sudah beli, pakai 100% IDR cash.
+                        if not other_in_pos:
+                            target_buy_idr = idr_cash * 0.50
+                        else:
+                            target_buy_idr = idr_cash
+
+                        # Cek batas minimum transaksi Indodax (Rp 10.000)
+                        if idr_cash >= 10000 and target_buy_idr >= 10000:
+                            actual_buy = min(target_buy_idr, idr_cash)
                             add_log(pair_key, f"BUY Rp {actual_buy:,.0f}...")
                             success_order, res_data = execute_real_order(pair_key, "buy", amount_idr=actual_buy)
                             if success_order:
@@ -466,12 +476,14 @@ def pair_trading_worker(pair_key):
                             else:
                                 add_log(pair_key, f"Gagal Buy: {res_data}")
 
+                    # LOGIKA SELL
                     elif p_data["in_position"]:
                         if p_data["buy_price"] <= 0:
                             p_data["buy_price"] = current_price
 
                         price_change_pct = (current_price - p_data["buy_price"]) / p_data["buy_price"]
 
+                        # Take Profit 0.3% atau Stop Loss -0.5%
                         if price_change_pct >= 0.003 or price_change_pct <= -0.005:
                             success, _, current_bonk, current_btc, _, _ = fetch_realtime_account()
                             target_amt = current_bonk if pair_key == "bonk_idr" else current_btc
