@@ -180,10 +180,18 @@ def check_initial_positions():
 def execute_real_order(pair_key, side, amount_idr=0, amount_coin=0):
     url = "https://indodax.com/tapi"
     nonce = str(int(time.time() * 1000))
+    current_price = pairs_state[pair_key]["last_market_price"]
+    
+    # Indodax membutuhkan integer untuk parameter harga IDR
+    price_val = int(current_price) if current_price >= 1 else current_price
+    if price_val <= 0:
+        price_val = 1000
+
     params = {
         "method": "trade",
         "pair": pair_key,
         "type": side,
+        "price": price_val,
         "nonce": nonce
     }
     if side == "buy":
